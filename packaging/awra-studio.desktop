@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Awra Studio
+GenericName=Studio musical
+Comment=Enregistrer, mixer et finir un son avec un ingénieur du son IA
+Exec=awra-studio %f
+Icon=org.awra.Studio
+Terminal=false
+Categories=AudioVideo;Audio;Recorder;Music;
+Keywords=DAW;musique;enregistrement;mixage;autotune;
+StartupWMClass=org.awra.Studio

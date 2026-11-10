@@ -99,6 +99,7 @@ pub struct Session {
     events: Receiver<Event>,
     /// Host clock minus local clock (ms).
     offset: Arc<Mutex<f64>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub fn now_ms() -> f64 {
@@ -138,12 +139,17 @@ impl Session {
 
         let (hub_tx, hub_rx) = unbounded::<Hub>();
         let (ev_tx, ev_rx) = unbounded::<Event>();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         // accept loop
         {
             let hub = hub_tx.clone();
+            let stop = stop.clone();
             std::thread::Builder::new().name("awra-collab-accept".into()).spawn(move || {
                 let mut next_id: PeerId = HOST_ID + 1;
                 for stream in listener.incoming() {
+                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
                     let Ok(stream) = stream else { continue };
                     let id = next_id;
                     next_id += 1;
@@ -167,6 +173,7 @@ impl Session {
             hub: hub_tx,
             events: ev_rx,
             offset: Arc::new(Mutex::new(0.0)),
+            stop,
         })
     }
 
@@ -263,6 +270,7 @@ impl Session {
             hub: hub_tx,
             events: ev_rx,
             offset,
+            stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -309,6 +317,10 @@ impl Session {
     }
     pub fn leave(&self) {
         let _ = self.hub.send(Hub::Leave);
+        if self.role == Role::Host && !self.stop.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            // wake the accept loop so that it ends and frees the port
+            let _ = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], self.port)), Duration::from_millis(300));
+        }
         if self.upnp {
             let port = self.port;
             std::thread::spawn(move || invite::upnp_unmap(port));

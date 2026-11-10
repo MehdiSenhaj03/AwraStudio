@@ -83,11 +83,14 @@ pub struct Document {
     pub dirty: bool,
     /// Incremented on every change (views compare it to refresh).
     pub revision: u64,
+    /// The inverse of the transaction the last undo/redo applied
+    /// (collaboration rebases with it).
+    pub last_inverse: Option<Transaction>,
 }
 
 impl Document {
     pub fn new(project: Project) -> Document {
-        Document { project, history: History::new(), dir: None, dirty: false, revision: 0 }
+        Document { project, history: History::new(), dir: None, dirty: false, revision: 0, last_inverse: None }
     }
 
     /// Applies a transaction and records it for undo. Returns the
@@ -125,8 +128,9 @@ impl Document {
     pub fn undo(&mut self) -> Option<Transaction> {
         let e = self.history.undo.pop()?;
         match e.inverse.apply(&mut self.project) {
-            Ok(_) => {
+            Ok(inv) => {
                 self.touch();
+                self.last_inverse = Some(inv);
                 let applied = e.inverse.clone();
                 self.history.redo.push(e);
                 Some(applied)
@@ -140,6 +144,7 @@ impl Document {
         match e.forward.apply(&mut self.project) {
             Ok(inv) => {
                 self.touch();
+                self.last_inverse = Some(inv.clone());
                 let applied = e.forward.clone();
                 self.history.undo.push(Entry { inverse: inv, ..e });
                 Some(applied)
@@ -154,8 +159,9 @@ impl Document {
         let i = self.history.undo.iter().rposition(|e| &e.forward.actor == actor)?;
         let e = self.history.undo.remove(i);
         match e.inverse.apply(&mut self.project) {
-            Ok(_) => {
+            Ok(inv) => {
                 self.touch();
+                self.last_inverse = Some(inv);
                 Some(e.inverse)
             }
             Err(_) => {
@@ -171,8 +177,9 @@ impl Document {
         let i = self.history.undo.iter().rposition(|e| e.forward.id == id)?;
         let e = self.history.undo.remove(i);
         match e.inverse.apply(&mut self.project) {
-            Ok(_) => {
+            Ok(inv) => {
                 self.touch();
+                self.last_inverse = Some(inv);
                 Some(e.inverse)
             }
             Err(_) => {

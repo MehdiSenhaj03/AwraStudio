@@ -71,6 +71,7 @@ pub struct Studio {
     pub export_busy: bool,
     export_rx: Option<Receiver<Result<(PathBuf, f64, f64), String>>>,
     pub scan_busy: bool,
+    join_rx: Option<Receiver<Result<Session, String>>>,
     last_autosave: f64,
     scan_rx: Option<Receiver<Vec<studio_plugins::PluginDesc>>>,
 }
@@ -121,6 +122,7 @@ impl Studio {
             export_busy: false,
             export_rx: None,
             scan_busy: false,
+            join_rx: None,
             last_autosave: awra::now_ms(),
             scan_rx: None,
         };
@@ -152,6 +154,19 @@ impl Studio {
         self.selected_clip = None;
         self.engine.seek(0.0);
         self.engine.send(Cmd::Bpm(self.doc.project.bpm));
+        if let Some(s) = &self.session {
+            if s.role == studio_collab::Role::Host {
+                // everyone switches to the new song (files follow on request)
+                s.reset(self.doc.project.clone());
+                for (id, info) in self.doc.project.assets.clone() {
+                    if let Some(p) = self.doc.asset_path(&id) {
+                        if let Ok(bytes) = std::fs::read(p) {
+                            s.share_asset(&id, &info.file, Arc::new(bytes));
+                        }
+                    }
+                }
+            }
+        }
         self.ui_revision += 1;
     }
 
@@ -251,8 +266,7 @@ impl Studio {
         self.after_change(&applied);
         if let Some(s) = &self.session {
             // the undo of a change is a new change for the others
-            let inverse = self.doc.history.redo.last().map(|e| e.forward.clone()).or_else(|| self.doc.history.undo.last().map(|e| e.inverse.clone()));
-            if let Some(inv) = inverse {
+            if let Some(inv) = self.doc.last_inverse.take() {
                 self.replica.local_applied(applied.clone(), inv);
             }
             s.propose(applied);
@@ -654,14 +668,18 @@ impl Studio {
         self.ui_revision += 1;
     }
 
+    /// Joins in the background (connecting can take a few seconds).
     pub fn join_session(&mut self, code: &str) {
-        match Session::join(code, &self.settings.user_name) {
-            Ok(s) => {
-                self.session = Some(s);
-                self.toasts.push("Connecté : réception du projet…".into());
-            }
-            Err(e) => self.toasts.push(format!("Connexion impossible : {e}")),
+        if self.join_rx.is_some() {
+            return;
         }
+        let (tx, rx) = unbounded();
+        let (code, name) = (code.to_string(), self.settings.user_name.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(Session::join(&code, &name).map_err(|e| e.to_string()));
+        });
+        self.join_rx = Some(rx);
+        self.toasts.push("Connexion à la session…".into());
         self.ui_revision += 1;
     }
 
@@ -841,6 +859,19 @@ impl Studio {
             self.toasts.push(format!("Lecture audio impossible : {e}"));
         }
         changed |= self.pump_ai();
+        if let Some(rx) = &self.join_rx {
+            if let Ok(r) = rx.try_recv() {
+                self.join_rx = None;
+                match r {
+                    Ok(s) => {
+                        self.session = Some(s);
+                        self.toasts.push("Connecté : réception du projet…".into());
+                    }
+                    Err(e) => self.toasts.push(format!("Connexion impossible : {e}")),
+                }
+                changed = true;
+            }
+        }
         changed |= self.pump_session();
         self.engine.pump_recording();
         self.engine.collect_garbage();
