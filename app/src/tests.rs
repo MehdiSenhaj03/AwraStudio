@@ -83,6 +83,20 @@ fn export_renders_the_song() {
 }
 
 #[test]
+fn stems_line_up() {
+    let mut s = studio("Sam");
+    let dir = std::env::temp_dir().join(format!("awra-stems-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    s.export_stems(dir.clone());
+    pump_until(&mut [&mut s], |s| !s[0].export_busy);
+    let files: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+    assert_eq!(files.len(), 4);
+    let lens: Vec<usize> = files.iter().map(|f| studio_dsp::io::decode_file(&f.path()).unwrap().frames()).collect();
+    assert!(lens.windows(2).all(|w| w[0] == w[1]), "{lens:?}");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
 fn two_studios_in_a_session() {
     let mut a = studio("Sam");
     a.host_session();

@@ -82,9 +82,24 @@ impl MasterPanel {
         e.append(&fmt);
         let export = button("Exporter le morceau…", Some("awra-studio-export-symbolic"), ButtonAppearance::Primary);
         e.append(&export);
+        let stems = button("Exporter les pistes séparées…", None, ButtonAppearance::Ghost);
+        stems.set_tooltip_text(Some("Une piste WAV par piste, avec ses effets, toutes calées sur le début"));
+        e.append(&stems);
         let last = label("", Typography::Muted);
         last.set_wrap(true);
         e.append(&last);
+        let (c, w) = (s.clone(), window.clone());
+        stems.connect_clicked(move |_| {
+            let dlg = awra::FileDialog::builder().title("Dossier des pistes séparées").build();
+            let c2 = c.clone();
+            dlg.select_folder(Some(&w), None, move |r| {
+                if let Ok(f) = r {
+                    if let Some(p) = f.path() {
+                        c2.borrow_mut().export_stems(p);
+                    }
+                }
+            });
+        });
         root.append(&e);
         let c = s.clone();
         let w = window.clone();

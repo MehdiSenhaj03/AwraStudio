@@ -22,6 +22,8 @@ pub struct Settings {
     pub recent: Vec<String>,
     pub try_upnp: bool,
     pub sync_transport: bool,
+    /// One bar before the take when recording from the middle.
+    pub count_in: bool,
 }
 
 impl Default for Settings {
@@ -41,6 +43,7 @@ impl Default for Settings {
             recent: Vec::new(),
             try_upnp: true,
             sync_transport: true,
+            count_in: true,
         }
     }
 }

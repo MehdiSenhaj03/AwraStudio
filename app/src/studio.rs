@@ -497,6 +497,12 @@ impl Studio {
             None => self.new_track(TrackKind::Vocal),
         };
         // a short pre-roll when starting at 0 helps singers
+        // one bar of pre-roll to find the beat (the take starts there too)
+        let pos = self.engine.position();
+        if self.settings.count_in && pos > 0.0 {
+            let bar = self.doc.project.beat() * 4.0;
+            self.engine.seek((pos - bar).max(0.0));
+        }
         self.rec_start = self.engine.position();
         match self.engine.start_recording(track) {
             Ok(()) => {
@@ -835,6 +841,47 @@ impl Studio {
         });
     }
 
+    /// Each track alone, with its effects, as WAV files in `dir`.
+    pub fn export_stems(&mut self, dir: PathBuf) {
+        if self.export_busy {
+            return;
+        }
+        self.export_busy = true;
+        let project = self.doc.project.clone();
+        let assets = self.assets.store.clone();
+        let pm = self.plugins.clone();
+        let (tx, rx) = unbounded();
+        self.export_rx = Some(rx);
+        std::thread::spawn(move || {
+            let f = move |s: &EffectSlot, sr: f64, mb: usize| pm.create_detached(s, sr, mb);
+            let end = project.duration() + 2.0;
+            let mut n = 0;
+            let mut err = None;
+            for t in &project.tracks {
+                if t.clips.is_empty() {
+                    continue;
+                }
+                // every stem spans the whole song, so they line up in any DAW
+                let mut solo = project.clone();
+                for o in solo.tracks.iter_mut() {
+                    o.mute = o.id != t.id;
+                    o.solo = false;
+                }
+                solo.master = Master::default();
+                let buf = studio_dsp::graph::render_range(&solo, &assets, Some(&f), 0.0, end);
+                let name = crate::ui::header::sanitize(&t.name);
+                if let Err(e) = studio_dsp::io::write_wav(&dir.join(format!("{name}.wav")), &buf, studio_dsp::io::WavFormat::Pcm24) {
+                    err = Some(e.to_string());
+                }
+                n += 1;
+            }
+            let _ = tx.send(match err {
+                Some(e) => Err(e),
+                None => Ok((dir, n as f64, f64::NAN)),
+            });
+        });
+    }
+
     pub fn scan_plugins(&mut self) {
         if self.scan_busy {
             return;
@@ -888,6 +935,9 @@ impl Studio {
                 self.export_busy = false;
                 self.export_rx = None;
                 match r {
+                    Ok((p, n, tp)) if tp.is_nan() => {
+                        self.toasts.push(format!("{n:.0} piste(s) exportée(s) dans {}", p.display()));
+                    }
                     Ok((p, lufs, tp)) => {
                         self.toasts.push(format!("Exporté : {} ({lufs:.1} LUFS, crête {tp:.1} dBTP)", p.display()));
                         self.last_export = Some((p, lufs, tp));

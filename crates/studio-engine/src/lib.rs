@@ -300,7 +300,8 @@ impl Engine {
         let (rec_tx, rec_rx) = rtrb::RingBuffer::<f32>::new(project_rate as usize * 4);
         let mut input_rate = project_rate;
         let mut input_name = None;
-        let input = match host.default_input_device() {
+        let no_audio = std::env::var("AWRA_STUDIO_NO_AUDIO").is_ok();
+        let input = match host.default_input_device().filter(|_| !no_audio) {
             Some(dev) => {
                 input_name = dev.name().ok();
                 match open_input(&dev, project_rate, mon_tx, rec_tx, shared.clone()) {
