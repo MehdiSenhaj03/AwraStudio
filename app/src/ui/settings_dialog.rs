@@ -248,6 +248,8 @@ pub fn open_tab(s: &S, window: &awra::Window, tab: u32) {
 
     // Audio & session
     let au = awra::Box::new(Orientation::Vertical, 12);
+    au.append(&super::audio::controls(s, 230));
+    au.append(&super::section("Enregistrement et session"));
     let g2 = grid();
     let name = awra::Entry::new();
     name.set_text(&st.settings.user_name);
@@ -264,16 +266,9 @@ pub fn open_tab(s: &S, window: &awra::Window, tab: u32) {
     upnp.set_halign(awra::Align::Start);
     row(&g2, 3, "Ouvrir le port sur la box (UPnP)", &upnp);
     au.append(&g2);
-    let audio = label(
-        &format!(
-            "Sortie audio : {}{}",
-            st.engine.output_name,
-            st.engine.input_name.as_ref().map(|i| format!(" · Entrée : {i}")).unwrap_or_else(|| " · aucun micro".into())
-        ),
-        Typography::Muted,
-    );
-    audio.set_wrap(true);
-    au.append(&audio);
+    let au = super::scrolled(&au);
+    au.set_propagate_natural_height(true);
+    au.set_max_content_height(560);
     stack.add_named(&au, Some("audio"));
     drop(st);
 

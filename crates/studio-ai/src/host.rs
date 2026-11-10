@@ -65,4 +65,13 @@ pub trait StudioHost {
     fn plugins(&self) -> Vec<PluginDesc>;
     /// Undoes the agent's last transaction.
     fn undo_ai(&mut self) -> Result<String, String>;
+    /// Everything about the application besides the project: transport,
+    /// sound devices, settings, interface, session, history, files.
+    fn app_state(&mut self) -> Result<serde_json::Value, String> {
+        Err("état du logiciel indisponible ici".into())
+    }
+    /// Does what the user could do by hand (see tools::APP_ACTIONS).
+    fn app_action(&mut self, _action: &serde_json::Value) -> Result<serde_json::Value, String> {
+        Err("action indisponible ici".into())
+    }
 }

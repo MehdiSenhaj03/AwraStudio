@@ -15,6 +15,7 @@ pub struct HeaderUi {
     time: awra::Label,
     info: awra::Label,
     metronome: awra::ToggleButton,
+    mic: awra::Button,
     undo: awra::Button,
     redo: awra::Button,
     session: awra::Button,
@@ -90,7 +91,10 @@ impl HeaderUi {
         metronome.set_icon_name("awra-studio-metronome-symbolic");
         metronome.set_tooltip_text(Some("Métronome"));
         metronome.set_appearance(ButtonAppearance::Ghost);
-        for w in [super::wd(&to_start), super::wd(&play), super::wd(&record), super::wd(&time), super::wd(&info), super::wd(&metronome)] {
+        // the microphone: choose it, hear yourself, see its level
+        let mic = button("", Some("awra-studio-mic-symbolic"), ButtonAppearance::Ghost);
+        mic.set_tooltip_text(Some("Micro et sortie audio"));
+        for w in [super::wd(&to_start), super::wd(&play), super::wd(&record), super::wd(&time), super::wd(&info), super::wd(&metronome), super::wd(&mic)] {
             transport.append(w);
         }
         header.set_center_widget(Some(&transport));
@@ -115,6 +119,7 @@ impl HeaderUi {
             time,
             info,
             metronome: metronome.clone(),
+            mic: mic.clone(),
             undo: undo.clone(),
             redo: redo.clone(),
             session: session.clone(),
@@ -137,6 +142,8 @@ impl HeaderUi {
             let on = b.is_active();
             st.engine.send(studio_engine::Cmd::Metronome(on));
         });
+        let (c, w) = (s.clone(), window.clone());
+        mic.connect_clicked(move |b| super::audio::popover(&c, b, &w));
         let c = s.clone();
         undo.connect_clicked(move |_| c.borrow_mut().undo());
         let c = s.clone();
@@ -312,6 +319,7 @@ impl HeaderUi {
         self.undo.set_sensitive(s.doc.history.can_undo());
         self.redo.set_sensitive(s.doc.history.can_redo());
         self.metronome.set_active(s.settings.metronome);
+        self.mic.set_tooltip_text(Some(&super::audio::summary(s)));
         if s.session.is_some() {
             self.session.set_appearance(ButtonAppearance::Secondary);
         } else {

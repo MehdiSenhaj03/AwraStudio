@@ -25,7 +25,29 @@ pub struct Settings {
     /// One bar before the take when recording from the middle.
     pub count_in: bool,
     pub appearance: crate::ui::appearance::Appearance,
+    /// The microphone and the output by name (None: the system's).
+    pub audio_input: Option<String>,
+    pub audio_output: Option<String>,
+    /// No microphone opened at all.
+    pub no_input: bool,
+    /// Frames per sound-card callback (0: the card's default).
+    pub buffer_frames: u32,
+    /// How the voice is heard while singing: 0 straight (fastest), 1
+    /// through low-latency effects, 2 through every effect at full quality.
+    pub monitor_mode: u8,
+    /// Hear the microphone as soon as a track is armed (not only while
+    /// recording). Off by default: speakers could whistle.
+    pub monitor_armed: bool,
 }
+
+/// Buffer sizes offered (frames per callback), with what they mean.
+pub const BUFFER_SIZES: [(u32, &str); 5] = [
+    (64, "64 — le plus rapide (machine puissante)"),
+    (128, "128 — rapide (recommandé)"),
+    (256, "256 — équilibré"),
+    (512, "512 — sûr (moins de craquements)"),
+    (0, "Taille par défaut de la carte"),
+];
 
 impl Default for Settings {
     fn default() -> Self {
@@ -46,6 +68,12 @@ impl Default for Settings {
             sync_transport: true,
             count_in: true,
             appearance: Default::default(),
+            audio_input: None,
+            audio_output: None,
+            no_input: false,
+            buffer_frames: 128,
+            monitor_mode: 1,
+            monitor_armed: false,
         }
     }
 }
@@ -68,6 +96,15 @@ impl Settings {
         let _ = std::fs::create_dir_all(&d);
         if let Ok(s) = serde_json::to_string_pretty(self) {
             let _ = std::fs::write(d.join("settings.json"), s);
+        }
+    }
+
+    pub fn device_choice(&self) -> studio_engine::DeviceChoice {
+        studio_engine::DeviceChoice {
+            input: self.audio_input.clone(),
+            output: self.audio_output.clone(),
+            no_input: self.no_input,
+            buffer_frames: self.buffer_frames,
         }
     }
 

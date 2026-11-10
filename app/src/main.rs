@@ -13,6 +13,7 @@
 //! SPDX-License-Identifier: GPL-3.0-or-later
 
 mod aihost;
+mod appctl;
 mod assets;
 mod demo;
 mod settings;

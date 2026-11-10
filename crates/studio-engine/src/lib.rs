@@ -33,6 +33,8 @@ pub enum Cmd {
     Monitor(Option<Id>),
     Metronome(bool),
     Bpm(f64),
+    /// How the live input is heard (see MixGraph::monitor_mode).
+    MonitorMode(u8),
 }
 
 /// State shared with the UI (lock-free reads).
@@ -44,6 +46,10 @@ pub struct Shared {
     input_peak: AtomicU32,
     pub device_rate: AtomicU32,
     pub callbacks: AtomicI64,
+    /// Frames per callback of the input and the output (latency).
+    pub in_period: AtomicU32,
+    pub out_period: AtomicU32,
+    pub input_rate: AtomicU32,
 }
 
 impl Shared {
@@ -75,6 +81,7 @@ struct Rt {
     input: Vec<f32>,
     monitor: Option<rtrb::Consumer<f32>>,
     monitoring: bool,
+    monitor_mode: u8,
     metronome: bool,
     bpm: f64,
     // output resampling when the device's rate differs (linear)
@@ -91,6 +98,7 @@ impl Rt {
                     g.adopt(&mut self.graph);
                     let old = std::mem::replace(&mut self.graph, g);
                     let _ = self.trash.try_send(old);
+                    self.graph.set_monitor_mode(self.monitor_mode);
                 }
                 Cmd::Light(op) => {
                     self.graph.apply_light(&op);
@@ -111,6 +119,10 @@ impl Rt {
                 }
                 Cmd::Metronome(on) => self.metronome = on,
                 Cmd::Bpm(b) => self.bpm = b,
+                Cmd::MonitorMode(m) => {
+                    self.monitor_mode = m;
+                    self.graph.set_monitor_mode(m);
+                }
             }
         }
         self.shared.playing.store(self.playing, Ordering::Relaxed);
@@ -126,9 +138,13 @@ impl Rt {
         let mut have_input = false;
         if let Some(c) = self.monitor.as_mut() {
             let avail = c.slots();
-            // keep the monitoring latency low: drop what piled up
-            if avail > n * 3 {
-                for _ in 0..avail - n {
+            // the shortest possible monitoring: never more waiting in the
+            // ring than one input period beyond this block (what piles up
+            // from start-up or clock drift is dropped)
+            let period = self.shared.in_period.load(Ordering::Relaxed) as usize;
+            let keep = n + period.max(32);
+            if avail > keep + 32 {
+                for _ in 0..avail - keep {
                     let _ = c.pop();
                 }
             }
@@ -175,6 +191,7 @@ impl Rt {
         self.handle_commands();
         self.shared.callbacks.fetch_add(1, Ordering::Relaxed);
         let frames = data.len() / channels.max(1);
+        self.shared.out_period.store(frames as u32, Ordering::Relaxed);
         let ratio = self.project_rate / self.device_rate;
         let mut f = 0;
         while f < frames {
@@ -189,7 +206,8 @@ impl Rt {
                 // linear interpolation from the project rate to the device's
                 if self.hold_pos + 1 >= self.hold.len() {
                     let keep = self.hold.last().copied().unwrap_or((0.0, 0.0));
-                    let n = 512;
+                    // only what this callback still needs: no extra delay
+                    let n = (((frames - f) as f64 * ratio).ceil() as usize + 1).clamp(16, MAX_BLOCK);
                     self.render_block(n);
                     self.hold.clear();
                     self.hold.push(keep);
@@ -261,6 +279,80 @@ struct Recorder {
     track: Id,
 }
 
+/// Which sound devices to use, by name; None: the system's default.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DeviceChoice {
+    pub input: Option<String>,
+    pub output: Option<String>,
+    /// No microphone at all (nothing is opened for input).
+    pub no_input: bool,
+    /// Frames per callback asked of the card (0: its default). Small is
+    /// fast (monitoring), too small crackles on a busy machine.
+    pub buffer_frames: u32,
+}
+
+/// The buffer size a device accepts nearest to the wish (None: default).
+fn buffer_size(range: &cpal::SupportedBufferSize, want: u32) -> cpal::BufferSize {
+    if want == 0 {
+        return cpal::BufferSize::Default;
+    }
+    match range {
+        cpal::SupportedBufferSize::Range { min, max } => cpal::BufferSize::Fixed(want.clamp(*min, *max)),
+        cpal::SupportedBufferSize::Unknown => cpal::BufferSize::Fixed(want),
+    }
+}
+
+/// The sound devices of the machine.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AudioDevices {
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
+    pub default_input: Option<String>,
+    pub default_output: Option<String>,
+}
+
+/// Fake devices for tests and screenshots without a sound card:
+/// AWRA_STUDIO_FAKE_DEVICES="Micro USB;Micro intégré|Casque;Haut-parleurs".
+fn fake_devices() -> Option<AudioDevices> {
+    let v = std::env::var("AWRA_STUDIO_FAKE_DEVICES").ok()?;
+    let (i, o) = v.split_once('|').unwrap_or((&v, ""));
+    let list = |s: &str| s.split(';').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect::<Vec<_>>();
+    let (inputs, outputs) = (list(i), list(o));
+    Some(AudioDevices { default_input: inputs.first().cloned(), default_output: outputs.first().cloned(), inputs, outputs })
+}
+
+/// Lists the microphones and outputs (takes a moment on some systems).
+pub fn list_devices() -> AudioDevices {
+    if let Some(f) = fake_devices() {
+        return f;
+    }
+    if std::env::var("AWRA_STUDIO_NO_AUDIO").is_ok() {
+        return AudioDevices::default();
+    }
+    let host = cpal::default_host();
+    let names = |it: Option<Vec<cpal::Device>>| {
+        let mut v: Vec<String> = it.unwrap_or_default().iter().filter_map(|d| d.name().ok()).filter(|n| n != "null").collect();
+        v.dedup();
+        v
+    };
+    AudioDevices {
+        inputs: names(host.input_devices().ok().map(|d| d.collect())),
+        outputs: names(host.output_devices().ok().map(|d| d.collect())),
+        default_input: host.default_input_device().and_then(|d| d.name().ok()),
+        default_output: host.default_output_device().and_then(|d| d.name().ok()),
+    }
+}
+
+fn find_device(host: &cpal::Host, input: bool, name: Option<&str>) -> (Option<cpal::Device>, Option<String>) {
+    let default = || if input { host.default_input_device() } else { host.default_output_device() };
+    let Some(name) = name else { return (default(), None) };
+    let found = if input { host.input_devices().ok().and_then(|mut d| d.find(|d| d.name().ok().as_deref() == Some(name))) } else { host.output_devices().ok().and_then(|mut d| d.find(|d| d.name().ok().as_deref() == Some(name))) };
+    match found {
+        Some(d) => (Some(d), None),
+        None => (default(), Some(format!("« {name} » est introuvable : celui du système est utilisé"))),
+    }
+}
+
 pub struct Engine {
     cmds: Sender<Cmd>,
     trash: Receiver<Box<MixGraph>>,
@@ -282,6 +374,11 @@ pub struct Engine {
 impl Engine {
     /// Starts the engine at the project's rate with an empty graph.
     pub fn new(project_rate: u32, graph: MixGraph) -> Engine {
+        Engine::with_devices(project_rate, graph, &DeviceChoice::default())
+    }
+
+    /// Starts the engine on the chosen devices.
+    pub fn with_devices(project_rate: u32, graph: MixGraph, choice: &DeviceChoice) -> Engine {
         let (cmd_tx, cmd_rx) = bounded::<Cmd>(1024);
         let (trash_tx, trash_rx) = bounded::<Box<MixGraph>>(64);
         let shared = Arc::new(Shared {
@@ -292,6 +389,9 @@ impl Engine {
             input_peak: AtomicU32::new(0),
             device_rate: AtomicU32::new(project_rate),
             callbacks: AtomicI64::new(0),
+            in_period: AtomicU32::new(0),
+            out_period: AtomicU32::new(0),
+            input_rate: AtomicU32::new(project_rate),
         });
 
         // input first, so that monitoring has its ring
@@ -300,11 +400,23 @@ impl Engine {
         let (rec_tx, rec_rx) = rtrb::RingBuffer::<f32>::new(project_rate as usize * 4);
         let mut input_rate = project_rate;
         let mut input_name = None;
+        let mut warnings = Vec::new();
         let no_audio = std::env::var("AWRA_STUDIO_NO_AUDIO").is_ok();
-        let input = match host.default_input_device().filter(|_| !no_audio) {
+        let fake = fake_devices();
+        let in_dev = if no_audio || choice.no_input {
+            None
+        } else {
+            let (d, w) = find_device(&host, true, choice.input.as_deref());
+            warnings.extend(w);
+            d
+        };
+        if let (Some(f), false) = (&fake, choice.no_input) {
+            input_name = choice.input.clone().filter(|n| f.inputs.contains(n)).or(f.default_input.clone());
+        }
+        let input = match in_dev {
             Some(dev) => {
                 input_name = dev.name().ok();
-                match open_input(&dev, project_rate, mon_tx, rec_tx, shared.clone()) {
+                match open_input(&dev, project_rate, choice.buffer_frames, mon_tx, rec_tx, shared.clone()) {
                     Ok((s, rate)) => {
                         input_rate = rate;
                         Some(s)
@@ -333,6 +445,7 @@ impl Engine {
             input: vec![0.0; MAX_BLOCK],
             monitor: if input.is_some() { Some(mon_rx) } else { None },
             monitoring: false,
+            monitor_mode: 1,
             metronome: false,
             bpm: 120.0,
             frac: 0.0,
@@ -345,13 +458,31 @@ impl Engine {
         let mut last_error = None;
         let mut null_thread = None;
         let disable = std::env::var("AWRA_STUDIO_NO_AUDIO").is_ok();
-        let dev = if disable { None } else { host.default_output_device() };
-        match dev.map(|d| (d.name().unwrap_or_default(), open_output(&d, project_rate))) {
-            Some((name, Ok((cfg, fmt)))) => {
+        let dev = if disable {
+            None
+        } else {
+            let (d, w) = find_device(&host, false, choice.output.as_deref());
+            warnings.extend(w);
+            d
+        };
+        if let Some(f) = &fake {
+            output_name = choice.output.clone().filter(|n| f.outputs.contains(n)).or(f.default_output.clone()).unwrap_or(output_name);
+        }
+        match dev.map(|d| (d.name().unwrap_or_default(), open_output(&d, project_rate, choice.buffer_frames), d)) {
+            Some((name, Ok((mut cfg, fmt)), dev)) => {
                 rt.device_rate = cfg.sample_rate.0 as f64;
                 shared.device_rate.store(cfg.sample_rate.0, Ordering::Relaxed);
-                let dev = host.default_output_device().unwrap();
-                match build_output(&dev, &cfg, fmt, rt) {
+                let mut res = build_output(&dev, &cfg, fmt, rt);
+                // a card that refuses the small buffer: its own size then
+                if let Err((_, Some(_))) = &res {
+                    if cfg.buffer_size != cpal::BufferSize::Default {
+                        if let Err((_, Some(back))) = res {
+                            cfg.buffer_size = cpal::BufferSize::Default;
+                            res = build_output(&dev, &cfg, fmt, back);
+                        }
+                    }
+                }
+                match res {
                     Ok(s) => {
                         output_name = name;
                         output = Some(s);
@@ -362,13 +493,16 @@ impl Engine {
                     }
                 }
             }
-            Some((_, Err(e))) => {
+            Some((_, Err(e), _)) => {
                 last_error = Some(e.to_string());
                 null_thread = Some(spawn_null(rt, project_rate));
             }
             None => null_thread = Some(spawn_null(rt, project_rate)),
         }
         let latency_ms = 20.0;
+        if last_error.is_none() && !warnings.is_empty() {
+            last_error = Some(warnings.join(" ; "));
+        }
         Engine {
             cmds: cmd_tx,
             trash: trash_rx,
@@ -387,11 +521,44 @@ impl Engine {
         }
     }
 
+    /// Closes the sound devices (before opening others).
+    pub fn close(&mut self) {
+        self.output = None;
+        self.input = None;
+        if let Some((stop, h)) = self.null_thread.take() {
+            stop.store(true, Ordering::Relaxed);
+            let _ = h.join();
+        }
+    }
+
     pub fn has_device(&self) -> bool {
         self.output.is_some()
     }
     pub fn has_input(&self) -> bool {
         self.input.is_some()
+    }
+    /// The microphone's level now (peak, 0..1, decaying).
+    pub fn input_level(&self) -> f32 {
+        f32::from_bits(self.shared.input_peak.load(Ordering::Relaxed))
+    }
+    /// The rate the sound card runs at.
+    pub fn device_rate(&self) -> u32 {
+        self.shared.device_rate.load(Ordering::Relaxed)
+    }
+    /// How long the voice takes from the microphone to the ears (ms),
+    /// as the cards run now: an input period, an output period, the ring
+    /// margin, and the effects' own delay in the monitoring mode.
+    pub fn monitor_latency_ms(&self, mode: u8) -> Option<f64> {
+        self.input.as_ref()?;
+        let rate = self.device_rate().max(1) as f64;
+        let inp = self.shared.in_period.load(Ordering::Relaxed) as f64;
+        let out = self.shared.out_period.load(Ordering::Relaxed) as f64;
+        let dsp = match mode {
+            0 => 0.0,
+            1 => 5.0,
+            _ => 36.0,
+        };
+        Some((inp + out + 32.0) / rate * 1000.0 + dsp)
     }
 
     pub fn send(&self, cmd: Cmd) {
@@ -508,8 +675,9 @@ fn spawn_null(mut rt: Rt, rate: u32) -> (Arc<AtomicBool>, std::thread::JoinHandl
     (stop, h)
 }
 
-fn open_output(dev: &cpal::Device, rate: u32) -> Result<(cpal::StreamConfig, cpal::SampleFormat)> {
+fn open_output(dev: &cpal::Device, rate: u32, buffer: u32) -> Result<(cpal::StreamConfig, cpal::SampleFormat)> {
     let def = dev.default_output_config()?;
+    let range = def.buffer_size().clone();
     let fmt = def.sample_format();
     let mut cfg: cpal::StreamConfig = def.config();
     // the project's rate when the device offers it
@@ -520,7 +688,7 @@ fn open_output(dev: &cpal::Device, rate: u32) -> Result<(cpal::StreamConfig, cpa
             cfg.sample_rate = cpal::SampleRate(rate);
         }
     }
-    cfg.buffer_size = cpal::BufferSize::Default;
+    cfg.buffer_size = buffer_size(&range, buffer);
     Ok((cfg, fmt))
 }
 
@@ -570,59 +738,105 @@ fn build_output(
     }
 }
 
+/// What the input callback carries (taken on its first call, given back
+/// when the stream can't be built so that it can be tried again).
+struct InState {
+    mon: rtrb::Producer<f32>,
+    rec: rtrb::Producer<f32>,
+    // monitoring at the project's rate when the card runs at another one
+    prev: f32,
+    t: f64,
+}
+
 fn open_input(
     dev: &cpal::Device,
     rate: u32,
-    mut mon: rtrb::Producer<f32>,
-    mut rec: rtrb::Producer<f32>,
+    buffer: u32,
+    mon: rtrb::Producer<f32>,
+    rec: rtrb::Producer<f32>,
     shared: Arc<Shared>,
 ) -> Result<(cpal::Stream, u32)> {
     let def = dev.default_input_config()?;
     let fmt = def.sample_format();
+    let range = def.buffer_size().clone();
     let mut cfg: cpal::StreamConfig = def.config();
     if let Ok(mut ranges) = dev.supported_input_configs() {
         if ranges.any(|r| r.min_sample_rate().0 <= rate && r.max_sample_rate().0 >= rate && r.sample_format() == fmt) {
             cfg.sample_rate = cpal::SampleRate(rate);
         }
     }
-    let ch = cfg.channels as usize;
+    cfg.buffer_size = buffer_size(&range, buffer);
     let got_rate = cfg.sample_rate.0;
-    let same_rate = got_rate == rate;
-    let err = |e| eprintln!("awra-studio: erreur d'entrée audio : {e}");
-    macro_rules! build {
-        ($t:ty) => {
-            dev.build_input_stream(
-                &cfg,
-                move |data: &[$t], _| {
-                    let mut pk = 0.0f32;
-                    for frame in data.chunks(ch.max(1)) {
-                        // the first channel: a microphone is on input 1
-                        let s: f32 = <f32 as cpal::FromSample<$t>>::from_sample_(frame[0]);
-                        pk = pk.max(s.abs());
-                        if same_rate {
-                            let _ = mon.push(s);
+    shared.input_rate.store(got_rate, Ordering::Relaxed);
+    let cell = Arc::new(Mutex::new(Some(InState { mon, rec, prev: 0.0, t: 0.0 })));
+    let build = |cfg: &cpal::StreamConfig| -> Result<cpal::Stream> {
+        let ch = cfg.channels as usize;
+        // input samples per monitored sample
+        let step = got_rate as f64 / rate as f64;
+        let same_rate = got_rate == rate;
+        let err = |e| eprintln!("awra-studio: erreur d'entrée audio : {e}");
+        macro_rules! build {
+            ($t:ty) => {{
+                let (c2, shared) = (cell.clone(), shared.clone());
+                let mut st: Option<InState> = None;
+                dev.build_input_stream(
+                    cfg,
+                    move |data: &[$t], _| {
+                        if st.is_none() {
+                            st = c2.lock().take();
                         }
-                        if shared.recording.load(Ordering::Relaxed) {
-                            let _ = rec.push(s);
+                        let Some(s) = st.as_mut() else { return };
+                        let frames = data.len() / ch.max(1);
+                        shared.in_period.store((frames as f64 / step).ceil() as u32, Ordering::Relaxed);
+                        let rec_on = shared.recording.load(Ordering::Relaxed);
+                        let mut pk = 0.0f32;
+                        for frame in data.chunks(ch.max(1)) {
+                            // the first channel: a microphone is on input 1
+                            let x: f32 = <f32 as cpal::FromSample<$t>>::from_sample_(frame[0]);
+                            pk = pk.max(x.abs());
+                            if same_rate {
+                                let _ = s.mon.push(x);
+                            } else {
+                                // linear interpolation to the project's rate
+                                while s.t <= 1.0 {
+                                    let _ = s.mon.push(s.prev + (x - s.prev) * s.t as f32);
+                                    s.t += step;
+                                }
+                                s.t -= 1.0;
+                                s.prev = x;
+                            }
+                            if rec_on {
+                                let _ = s.rec.push(x);
+                            }
                         }
-                    }
-                    let old = f32::from_bits(shared.input_peak.load(Ordering::Relaxed));
-                    let v = pk.max(old * 0.9);
-                    shared.input_peak.store(v.to_bits(), Ordering::Relaxed);
-                },
-                err,
-                None,
-            )?
+                        let old = f32::from_bits(shared.input_peak.load(Ordering::Relaxed));
+                        let v = pk.max(old * 0.9);
+                        shared.input_peak.store(v.to_bits(), Ordering::Relaxed);
+                    },
+                    err,
+                    None,
+                )?
+            }};
+        }
+        let stream = match fmt {
+            cpal::SampleFormat::F32 => build!(f32),
+            cpal::SampleFormat::I16 => build!(i16),
+            cpal::SampleFormat::U16 => build!(u16),
+            cpal::SampleFormat::I32 => build!(i32),
+            other => return Err(anyhow!("format d'entrée non géré : {other:?}")),
         };
-    }
-    let stream = match fmt {
-        cpal::SampleFormat::F32 => build!(f32),
-        cpal::SampleFormat::I16 => build!(i16),
-        cpal::SampleFormat::U16 => build!(u16),
-        cpal::SampleFormat::I32 => build!(i32),
-        other => return Err(anyhow!("format d'entrée non géré : {other:?}")),
+        stream.play()?;
+        Ok(stream)
     };
-    stream.play()?;
+    let stream = match build(&cfg) {
+        Ok(s) => s,
+        // a card that refuses the small buffer: its own size then
+        Err(_) if cfg.buffer_size != cpal::BufferSize::Default => {
+            cfg.buffer_size = cpal::BufferSize::Default;
+            build(&cfg)?
+        }
+        Err(e) => return Err(e),
+    };
     Ok((stream, got_rate))
 }
 

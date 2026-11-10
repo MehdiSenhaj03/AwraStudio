@@ -12,6 +12,8 @@ use crate::studio::Studio;
 
 fn studio(name: &str) -> Studio {
     std::env::set_var("AWRA_STUDIO_NO_AUDIO", "1");
+    // no sound card here: pretend two microphones and two outputs
+    std::env::set_var("AWRA_STUDIO_FAKE_DEVICES", "Micro USB Shure MV7;Micro intégré|Casque;Haut-parleurs");
     let settings = Settings { user_name: name.into(), try_upnp: false, ..Default::default() };
     let (doc, bufs) = crate::demo::demo_document();
     let mut s = Studio::new(doc, settings);
@@ -171,4 +173,49 @@ fn dropped_files_land_on_a_track_or_a_new_one() {
     s.undo();
     assert_eq!(s.doc.project.tracks.len(), n);
     std::fs::remove_dir_all(dir).ok();
+}
+
+fn ask(s: &mut Studio, q: &str) -> String {
+    let n = s.ai_entries.len();
+    s.ask_ai(q);
+    pump_until(&mut [s], |s| s[0].ai_busy.is_none() && s[0].ai_entries.len() >= n + 2);
+    s.ai_entries.last().unwrap().text.clone()
+}
+
+#[test]
+fn the_engineer_sees_and_drives_the_whole_app() {
+    let mut s = studio("Sam");
+    // what microphone do I have?
+    let r = ask(&mut s, "Quel micro j'ai ?");
+    assert!(r.contains("Micro USB Shure MV7") && r.contains("Micro intégré"), "{r}");
+    // switch it
+    let r = ask(&mut s, "Utilise le micro intégré");
+    assert_eq!(s.settings.audio_input.as_deref(), Some("Micro intégré"), "{r}");
+    assert_eq!(s.engine.input_name.as_deref(), Some("Micro intégré"));
+    let r = ask(&mut s, "passe la sortie sur les haut-parleurs");
+    assert_eq!(s.settings.audio_output.as_deref(), Some("Haut-parleurs"), "{r}");
+    // the shortest return
+    let r = ask(&mut s, "Réduis la latence du retour micro au minimum");
+    assert_eq!(s.settings.buffer_frames, 64, "{r}");
+    assert_eq!(s.settings.monitor_mode, 0);
+    // transport, appearance, files
+    ask(&mut s, "va à 1:05");
+    assert!((s.engine.position() - 65.0).abs() < 0.01);
+    ask(&mut s, "active le métronome");
+    assert!(s.settings.metronome);
+    ask(&mut s, "passe en mode sombre");
+    assert_eq!(s.settings.appearance.theme, 2);
+    // the full state, as the model reads it
+    let st = crate::appctl::state(&s);
+    assert_eq!(st["audio"]["input"], "Micro intégré");
+    assert_eq!(st["transport"]["metronome"], true);
+    assert_eq!(st["audio"]["monitor_mode"], "direct");
+    // and any action by name
+    let r = crate::appctl::action(&mut s, &serde_json::json!({"action": "set_loop", "start": "0:10", "end": 20}));
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(s.doc.project.loop_region, Some((10.0, 20.0)));
+    let r = crate::appctl::action(&mut s, &serde_json::json!({"action": "new_track", "kind": "adlib", "name": "Choeurs"}));
+    assert!(r.is_ok());
+    assert!(s.doc.project.tracks.iter().any(|t| t.name == "Choeurs"));
+    assert!(crate::appctl::action(&mut s, &serde_json::json!({"action": "fly"})).is_err());
 }

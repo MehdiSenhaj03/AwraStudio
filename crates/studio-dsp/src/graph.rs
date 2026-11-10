@@ -74,6 +74,9 @@ pub struct MixGraph {
     pub play_clips: bool,
     /// Every slot's parameters, pushed into adopted processors.
     params: Vec<(Id, Vec<(String, f64)>)>,
+    /// How live input is heard: 0 straight (no effects, no delay), 1
+    /// through low-latency effects, 2 through the full effects.
+    pub monitor_mode: u8,
 }
 
 pub const MAX_BLOCK: usize = 4096;
@@ -141,6 +144,7 @@ impl MixGraph {
             scratch_r: vec![0.0; MAX_BLOCK],
             meters: Meters::default(),
             play_clips: true,
+            monitor_mode: 1,
             params: project
                 .tracks
                 .iter()
@@ -369,7 +373,7 @@ impl MixGraph {
                 }
             }
             if audible {
-                if t.monitor {
+                if t.monitor && self.monitor_mode != 0 {
                     if let Some(inp) = input {
                         for i in 0..n.min(inp.len()) {
                             l[i] += inp[i];
@@ -391,6 +395,15 @@ impl MixGraph {
                                 self.meters.reductions.push((s.id, gr));
                             }
                         }
+                    }
+                }
+            }
+            // straight monitoring: the voice as it is, after the chain
+            if audible && t.monitor && self.monitor_mode == 0 {
+                if let Some(inp) = input {
+                    for i in 0..n.min(inp.len()) {
+                        l[i] += inp[i];
+                        r[i] += inp[i];
                     }
                 }
             }
@@ -435,6 +448,25 @@ impl MixGraph {
     pub fn set_monitor(&mut self, track: Option<Id>) {
         for t in self.tracks.iter_mut() {
             t.monitor = Some(t.id) == track;
+        }
+        self.apply_monitor_latency();
+    }
+
+    pub fn set_monitor_mode(&mut self, mode: u8) {
+        self.monitor_mode = mode.min(2);
+        self.apply_monitor_latency();
+    }
+
+    /// The monitored track's effects run in their low-latency form.
+    pub fn apply_monitor_latency(&mut self) {
+        let mode = self.monitor_mode;
+        for t in self.tracks.iter_mut() {
+            let low = t.monitor && mode == 1;
+            for s in t.chain.iter_mut() {
+                if let Some(p) = s.proc.as_mut() {
+                    p.set_low_latency(low);
+                }
+            }
         }
     }
 }
@@ -592,5 +624,46 @@ mod tests {
         g2.adopt(&mut g1);
         assert!(g2.master[0].proc.is_some());
         assert!(g1.master[0].proc.is_none());
+    }
+
+    /// Where an impulse sung into the microphone comes out (frames).
+    fn monitor_delay(mode: u8, chain: Vec<EffectKind>) -> usize {
+        let mut p = Project::new("t");
+        let mut t = Track::new("Voix", TrackKind::Vocal);
+        for k in chain {
+            t.effects.push(EffectSlot::new(k));
+        }
+        let id = t.id;
+        p.tracks.push(t);
+        let mut g = MixGraph::build(&p, &AssetStore::new(), None, true);
+        g.play_clips = false;
+        g.set_monitor(Some(id));
+        g.set_monitor_mode(mode);
+        let n = 128;
+        let (mut l, mut r) = (vec![0.0f32; n], vec![0.0f32; n]);
+        for block in 0..40 {
+            let mut inp = vec![0.0f32; n];
+            if block == 0 {
+                inp[0] = 0.8;
+            }
+            l.fill(0.0);
+            r.fill(0.0);
+            g.render(block as i64 * n as i64, &mut l, &mut r, Some(&inp));
+            if let Some(i) = l.iter().position(|x| x.abs() > 0.02) {
+                return block * n + i;
+            }
+        }
+        usize::MAX
+    }
+
+    #[test]
+    fn the_voice_comes_back_at_once() {
+        let chain = vec![EffectKind::Denoise, EffectKind::Eq, EffectKind::Compressor];
+        // straight: not a single frame late, whatever the effects
+        assert_eq!(monitor_delay(0, chain.clone()), 0);
+        // low latency: the denoiser steps aside, the rest is immediate
+        assert!(monitor_delay(1, chain.clone()) < 8, "{}", monitor_delay(1, chain.clone()));
+        // full quality: the denoiser's window (what the take gets later)
+        assert!(monitor_delay(2, chain) >= 1000);
     }
 }

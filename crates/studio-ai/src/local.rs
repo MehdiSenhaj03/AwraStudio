@@ -343,6 +343,9 @@ pub fn run(host: &mut dyn StudioHost, request: &str, selected: Option<Id>) -> (S
 
 /// Same, saying what it is doing step by step.
 pub fn run_with_progress(host: &mut dyn StudioHost, request: &str, selected: Option<Id>, progress: &mut dyn FnMut(&str)) -> (String, Vec<(Id, String)>) {
+    if let Some(reply) = app_request(host, &normalize(request)) {
+        return (reply, Vec::new());
+    }
     let p = host.project();
     let steps = plan(&p, request, selected);
     if steps.is_empty() {
@@ -418,6 +421,210 @@ pub fn run_with_progress(host: &mut dyn StudioHost, request: &str, selected: Opt
         lines.push("Tout est annulable (bouton « Annuler » ou « annule »).".into());
     }
     (lines.join("\n"), committed)
+}
+
+/// The device of a list the request names (by any word of its name).
+fn named_device(t: &str, list: &[String]) -> Option<String> {
+    list.iter()
+        .find(|d| t.contains(&normalize(d)))
+        .or_else(|| {
+            list.iter().find(|d| {
+                normalize(d).split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() >= 3 && !matches!(*w, "micro" | "audio" | "sortie" | "entree" | "default")).any(|w| t.contains(w))
+            })
+        })
+        .cloned()
+}
+
+fn say(v: Result<Value, String>) -> String {
+    match v {
+        Ok(v) => v.get("say").and_then(Value::as_str).unwrap_or("C'est fait.").to_string(),
+        Err(e) => format!("Je n'ai pas pu : {e}."),
+    }
+}
+
+/// "1:20", "1 min 20", "80 s", "à 45" → seconds.
+fn time_in(t: &str) -> Option<f64> {
+    let words: Vec<&str> = t.split_whitespace().collect();
+    for (i, w) in words.iter().enumerate() {
+        if let Some((m, s)) = w.split_once(':') {
+            if let (Ok(m), Ok(s)) = (m.parse::<f64>(), s.trim_end_matches(|c: char| !c.is_ascii_digit()).parse::<f64>()) {
+                return Some(m * 60.0 + s);
+            }
+        }
+        if let Some((m, s)) = w.split_once("min") {
+            if let Ok(m) = m.parse::<f64>() {
+                let s = s.trim_end_matches('s').parse::<f64>().ok().or_else(|| words.get(i + 1).and_then(|x| x.trim_end_matches('s').parse().ok()));
+                return Some(m * 60.0 + s.unwrap_or(0.0));
+            }
+        }
+        if let Ok(n) = w.trim_end_matches('s').replace(',', ".").parse::<f64>() {
+            let next = words.get(i + 1).copied().unwrap_or("");
+            if next.starts_with("min") {
+                let s = words.get(i + 2).and_then(|x| x.trim_end_matches('s').parse::<f64>().ok()).unwrap_or(0.0);
+                return Some(n * 60.0 + s);
+            }
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// Requests about the application rather than the sound: devices,
+/// monitoring, transport, files, appearance. None when it isn't one.
+fn app_request(host: &mut dyn StudioHost, t: &str) -> Option<String> {
+    let short = t.split_whitespace().count() <= 6;
+    let device_words = has(t, &["micro", "entree", "input", "carte son", "interface audio", "sortie audio", "sortie son", "casque", "haut-parleur", "haut parleur", "enceinte", "peripherique"]);
+    let asks = has(t, &["quel", "quelle", "c'est quoi", "lequel", "laquelle", "liste", "dispo", "j'ai", "as-tu", "info", "branche", "detect", "reconnai"]);
+    let change = has(t, &["change", "utilise le", "utilise la", "utilise mon", "utilise ma", "prends", "passe sur", "passe sous", "bascule", "choisis", "selectionne", "mets le micro", "mets la sortie"]);
+    // "passe la sortie sur…", "mets le casque", "bascule vers…"
+    let change = change || (!asks && has(t, &["passe ", "mets ", "met ", "veux ", "vers "]));
+    let output_words = has(t, &["sortie", "casque", "haut-parleur", "haut parleur", "enceinte", "ecoute sur", "son sort"]);
+
+    // latency of the return / monitoring
+    if has(t, &["latence", "retour micro", "retour casque", "retour de voix", "delai", "decalage"]) && !has(t, &["clip", "piste"]) {
+        if has(t, &["reduis", "baisse", "diminue", "plus rapide", "moins", "optimise", "minimum", "instantan", "supprime", "enleve"]) {
+            let r = host.app_action(&json!({"action": "set_audio", "buffer_frames": 64, "monitor_mode": if has(t, &["effet", "autotune"]) { "low_latency" } else { "direct" }}));
+            let ms = r.as_ref().ok().and_then(|v| v.get("latency_ms")).and_then(Value::as_f64);
+            return Some(format!(
+                "Retour au plus court : tampon de 64 échantillons{}.{}",
+                if has(t, &["effet", "autotune"]) { ", effets en faible latence" } else { " et retour direct (ta voix telle quelle, sans attendre les effets)" },
+                ms.map(|m| format!(" Latence micro → casque ≈ {m:.0} ms.")).unwrap_or_default()
+            ));
+        }
+        let a = host.app_state().ok()?;
+        let au = a.get("audio")?;
+        let ms = au.get("monitor_latency_ms").and_then(Value::as_f64);
+        return Some(match ms {
+            Some(m) => format!(
+                "Ton retour micro met ≈ {m:.0} ms (tampon {} échantillons, mode {}). Dis « réduis la latence » pour le plus rapide possible.",
+                au.get("buffer_frames").and_then(Value::as_u64).unwrap_or(0),
+                match au.get("monitor_mode").and_then(Value::as_str) {
+                    Some("direct") => "direct",
+                    Some("full") => "avec tous les effets",
+                    _ => "effets en faible latence",
+                }
+            ),
+            None => "Aucun micro n'est ouvert, donc pas de retour. Choisis-en un avec le bouton micro en haut, ou dis « utilise le micro … ».".into(),
+        });
+    }
+
+    // hear oneself outside a take
+    if has(t, &["m'entendre", "entendre ma voix", "m'ecouter", "retour dans le casque", "monitoring"]) {
+        let on = !has(t, &["coupe", "desactive", "arrete", "plus m'entendre", "enleve"]);
+        return Some(say(host.app_action(&json!({"action": "set_audio", "monitor_armed": on}))).replace(
+            "Réglage audio appliqué.",
+            if on { "Tu t'entends maintenant dès que la piste est armée (mets un casque)." } else { "Tu ne t'entends plus qu'en enregistrant." },
+        ));
+    }
+
+    if device_words && (change || (!asks && has(t, &["micro "]) && has(t, &["utilise", "prends"]))) {
+        let d = host.app_action(&json!({"action": "list_audio_devices"})).ok()?;
+        let list: Vec<String> = d.get(if output_words { "outputs" } else { "inputs" })?.as_array()?.iter().filter_map(|x| x.as_str().map(String::from)).collect();
+        let key = if output_words { "output" } else { "input" };
+        let target = if has(t, &["systeme", "par defaut", "defaut"]) {
+            Some("system".to_string())
+        } else if !output_words && has(t, &["aucun micro", "pas de micro", "sans micro", "coupe le micro"]) {
+            Some("none".to_string())
+        } else {
+            named_device(t, &list)
+        };
+        return Some(match target {
+            Some(n) => say(host.app_action(&json!({"action": "set_audio", key: n}))),
+            None if list.is_empty() => "Je ne trouve aucun périphérique audio sur cette machine.".into(),
+            None => format!("Lequel ? Disponibles : {}.", list.join(", ")),
+        });
+    }
+    if device_words && asks {
+        let a = host.app_state().ok()?;
+        let au = a.get("audio")?;
+        let list = |k: &str| au.get(k).and_then(Value::as_array).map(|l| l.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+        let input = au.get("input").and_then(Value::as_str);
+        let mut lines = vec![match (input, au.get("input_open").and_then(Value::as_bool).unwrap_or(false)) {
+            (Some(i), true) => format!("Ton micro : {i}."),
+            (Some(i), false) => format!("Micro choisi : {i}, mais il n'a pas pu être ouvert."),
+            (None, _) => "Aucun micro n'est utilisé.".into(),
+        }];
+        if let Some(o) = au.get("output").and_then(Value::as_str) {
+            lines.push(format!("Sortie : {o}."));
+        }
+        let ins = list("available_inputs");
+        if !ins.is_empty() {
+            lines.push(format!("Micros disponibles : {ins}."));
+        }
+        let outs = list("available_outputs");
+        if !outs.is_empty() && output_words {
+            lines.push(format!("Sorties disponibles : {outs}."));
+        }
+        if let Some(m) = au.get("monitor_latency_ms").and_then(Value::as_f64) {
+            lines.push(format!("Retour micro ≈ {m:.0} ms."));
+        }
+        if let Some(e) = au.get("problem").and_then(Value::as_str) {
+            lines.push(format!("Attention : {e}."));
+        }
+        lines.push("Pour changer : « utilise le micro … » ou le bouton micro en haut.".into());
+        return Some(lines.join("\n"));
+    }
+
+    // transport
+    if short && has(t, &["joue", "lecture", "play", "lance le son", "fais ecouter", "ecoute le morceau"]) && !has(t, &["joue avec", "rejoue"]) {
+        return Some(say(host.app_action(&json!({"action": "play"}))));
+    }
+    if short && has(t, &["stop", "arrete", "pause", "coupe le son"]) && !has(t, &["enregistr", "micro"]) {
+        return Some(say(host.app_action(&json!({"action": if has(t, &["stop"]) && !has(t, &["pause"]) { "stop" } else { "pause" }}))));
+    }
+    if has(t, &["va a ", "vas a ", "place-toi", "place toi", "aller a ", "saute a", "rembobine", "reviens au debut", "au debut"]) {
+        let at = if has(t, &["debut", "rembobine"]) { Some(0.0) } else { time_in(t) };
+        if let Some(at) = at {
+            return Some(say(host.app_action(&json!({"action": "seek", "time": at}))));
+        }
+    }
+    if has(t, &["metronome"]) && short {
+        let on = !has(t, &["coupe", "desactive", "enleve", "arrete", "sans"]);
+        return Some(say(host.app_action(&json!({"action": "metronome", "on": on}))));
+    }
+    if short && has(t, &["lance l'enregistrement", "enregistre-moi", "lance une prise", "commence la prise", "on enregistre", "record"]) {
+        return Some(say(host.app_action(&json!({"action": "record", "on": true}))));
+    }
+    if short && has(t, &["arrete l'enregistrement", "stoppe la prise", "fin de la prise"]) {
+        return Some(say(host.app_action(&json!({"action": "record", "on": false}))));
+    }
+    if has(t, &["retablis", "refais", "redo"]) && short {
+        return Some(say(host.app_action(&json!({"action": "redo"}))));
+    }
+
+    // files
+    if has(t, &["sauvegarde", "enregistre le projet", "save", "sauve le projet"]) {
+        return Some(say(host.app_action(&json!({"action": "save"}))));
+    }
+    if has(t, &["pistes separees", "stems", "piste par piste"]) && has(t, &["export", "sors", "donne"]) {
+        return Some(say(host.app_action(&json!({"action": "export_stems"}))));
+    }
+    if has(t, &["exporte", "export", "bounce", "sors le morceau", "fichier wav", "en wav"]) && !has(t, &["reference"]) {
+        let fmt = if has(t, &["16"]) { "wav16" } else if has(t, &["32"]) { "wav32" } else { "wav24" };
+        return Some(say(host.app_action(&json!({"action": "export", "format": fmt}))));
+    }
+
+    // appearance
+    if has(t, &["theme", "mode sombre", "mode clair", "dark mode", "light mode", "opaque", "transparen", "effet verre", "fond "]) && !has(t, &["voix", "son ", "reverb"]) {
+        let mut a = json!({"action": "set_appearance"});
+        if has(t, &["sombre", "dark", "noir"]) {
+            a["theme"] = json!("dark");
+        } else if has(t, &["clair", "light", "blanc"]) {
+            a["theme"] = json!("light");
+        }
+        if has(t, &["opaque", "pas transparent", "plus transparent"]) && !has(t, &["moins opaque"]) {
+            a["preset"] = json!("opaque");
+        } else if has(t, &["transparen", "verre"]) {
+            a["preset"] = json!(if has(t, &["plus", "leger"]) { "clear" } else { "glass" });
+        }
+        if a.as_object().is_some_and(|m| m.len() > 1) {
+            return Some(say(host.app_action(&a)));
+        }
+    }
+    if has(t, &["plein ecran", "fullscreen"]) {
+        return Some(say(host.app_action(&json!({"action": "window", "state": "fullscreen"}))));
+    }
+    None
 }
 
 pub fn help_text(p: &Project) -> String {

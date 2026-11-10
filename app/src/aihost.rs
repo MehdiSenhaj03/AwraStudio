@@ -15,6 +15,8 @@ pub enum Request {
     Commit(Transaction, Sender<Result<Id, String>>),
     Layout(LayoutCommand, Sender<Result<String, String>>),
     UndoAi(Sender<Result<String, String>>),
+    AppState(Sender<Result<serde_json::Value, String>>),
+    AppAction(serde_json::Value, Sender<Result<serde_json::Value, String>>),
 }
 
 pub enum AiMsg {
@@ -113,6 +115,27 @@ impl StudioHost for ProxyHost {
 
     fn undo_ai(&mut self) -> Result<String, String> {
         self.ask(Request::UndoAi)
+    }
+
+    fn app_state(&mut self) -> Result<serde_json::Value, String> {
+        let mut v = self.ask(Request::AppState)?;
+        // the devices are listed here, off the interface's thread
+        let d = studio_engine::list_devices();
+        if let Some(a) = v.get_mut("audio").and_then(|a| a.as_object_mut()) {
+            a.insert("available_inputs".into(), serde_json::json!(d.inputs));
+            a.insert("available_outputs".into(), serde_json::json!(d.outputs));
+            a.insert("system_input".into(), serde_json::json!(d.default_input));
+            a.insert("system_output".into(), serde_json::json!(d.default_output));
+        }
+        Ok(v)
+    }
+
+    fn app_action(&mut self, action: &serde_json::Value) -> Result<serde_json::Value, String> {
+        if let Some(r) = crate::appctl::worker_action(action) {
+            return r;
+        }
+        let a = action.clone();
+        self.ask(|s| Request::AppAction(a, s))
     }
 }
 

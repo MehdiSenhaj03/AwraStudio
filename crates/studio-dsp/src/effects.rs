@@ -18,6 +18,9 @@ pub trait Processor: Send {
     }
     /// The tempo changed (synced delays).
     fn set_bpm(&mut self, _bpm: f64) {}
+    /// Live monitoring: the shortest delay matters more than the finest
+    /// quality (a slow effect steps aside or takes a shorter window).
+    fn set_low_latency(&mut self, _on: bool) {}
 }
 
 /// Creates a built-in effect with its parameters (None for plugins).

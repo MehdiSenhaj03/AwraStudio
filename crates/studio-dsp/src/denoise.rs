@@ -28,6 +28,9 @@ pub struct Denoise {
     frames: usize,
     amount: f32,
     sensitivity: f32,
+    /// Live monitoring: no denoising (its window delays by 21 ms); the
+    /// take itself is denoised at playback.
+    bypass: bool,
 }
 
 impl Denoise {
@@ -56,6 +59,7 @@ impl Denoise {
             frames: 0,
             amount: 0.5,
             sensitivity: 0.5,
+            bypass: false,
         }
     }
 
@@ -110,7 +114,17 @@ impl Processor for Denoise {
         }
     }
 
+    fn set_low_latency(&mut self, on: bool) {
+        if on != self.bypass {
+            self.bypass = on;
+            self.reset();
+        }
+    }
+
     fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
+        if self.bypass {
+            return;
+        }
         let len = self.outbuf[0].len();
         for i in 0..l.len() {
             let pos = N - HOP + self.fill;

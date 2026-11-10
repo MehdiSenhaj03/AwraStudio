@@ -48,6 +48,12 @@ pub struct PendingImport {
 pub enum UiAction {
     ImportDialog,
     Demo,
+    OpenSettings(u32),
+    Editing(bool),
+    /// maximize, minimize, fullscreen, restore
+    Window(String),
+    /// The settings' appearance changed (the agent): apply it.
+    ApplyAppearance,
 }
 
 type ImportResult = (Id, PathBuf, Result<AudioBuffer, String>);
@@ -103,6 +109,11 @@ pub struct Studio {
     join_rx: Option<Receiver<Result<Session, String>>>,
     last_autosave: f64,
     scan_rx: Option<Receiver<Vec<studio_plugins::PluginDesc>>>,
+    /// The track whose live input the engine plays (last sent).
+    monitor_sent: Option<Option<Id>>,
+    /// What the interface shows (layout, panels…), kept by the UI for
+    /// the agent.
+    pub ui_info: serde_json::Value,
 }
 
 fn factory(pm: &PluginManager) -> impl Fn(&EffectSlot, f64, usize) -> Option<Box<dyn studio_dsp::Processor>> + 'static {
@@ -114,8 +125,9 @@ impl Studio {
     pub fn new(doc: Document, settings: Settings) -> Studio {
         let plugins = PluginManager::new();
         let g = MixGraph::build(&doc.project, &AssetStore::new(), None, true);
-        let mut engine = Engine::new(doc.project.sample_rate, g);
+        let mut engine = Engine::with_devices(doc.project.sample_rate, g, &settings.device_choice());
         engine.latency_ms = settings.latency_ms;
+        engine.send(Cmd::MonitorMode(settings.monitor_mode));
         let (req_tx, req_rx) = unbounded();
         let (ai_tx, ai_rx) = unbounded();
         let (import_tx, import_rx) = unbounded();
@@ -162,6 +174,8 @@ impl Studio {
             join_rx: None,
             last_autosave: awra::now_ms(),
             scan_rx: None,
+            monitor_sent: None,
+            ui_info: serde_json::Value::Null,
         };
         s.engine.send(Cmd::Metronome(s.settings.metronome));
         s.engine.send(Cmd::Bpm(s.doc.project.bpm));
@@ -228,9 +242,7 @@ impl Studio {
         g.create_new(&self.doc.project, &self.engine_slots, Some(fref));
         self.engine_slots = MixGraph::all_slot_ids(&self.doc.project);
         self.plugins.retain(&self.engine_slots);
-        if let Some(t) = self.recording {
-            g.set_monitor(Some(t));
-        }
+        g.set_monitor(self.monitor_target());
         self.engine.set_graph(g);
     }
 
@@ -542,7 +554,6 @@ impl Studio {
         }
     }
 
-    #[allow(dead_code)]
     pub fn stop(&mut self) {
         if self.recording.is_some() {
             self.stop_recording();
@@ -574,7 +585,7 @@ impl Studio {
         }
         // nothing to record from: say so before touching the project
         if self.engine.input_name.is_none() {
-            self.toasts.push("Enregistrement impossible : aucun micro détecté".into());
+            self.toasts.push("Aucun micro : choisis-le avec le bouton micro, en haut à côté du métronome".into());
             return;
         }
         let track = match self.selected.filter(|t| self.doc.project.track(*t).is_some_and(|t| t.kind != TrackKind::Instrumental)) {
@@ -599,6 +610,60 @@ impl Studio {
             }
             Err(e) => self.toasts.push(format!("Enregistrement impossible : {e}")),
         }
+    }
+
+    /// The track the microphone is heard through: the one recording, or
+    /// (when wanted) the armed one, else the selected voice.
+    pub fn monitor_target(&self) -> Option<Id> {
+        if let Some(t) = self.recording {
+            return Some(t);
+        }
+        if !self.settings.monitor_armed || !self.engine.has_input() {
+            return None;
+        }
+        let p = &self.doc.project;
+        p.tracks
+            .iter()
+            .find(|t| t.armed)
+            .or_else(|| self.selected.and_then(|id| p.track(id)).filter(|t| t.kind != TrackKind::Instrumental))
+            .map(|t| t.id)
+    }
+
+    /// Opens the sound devices of the settings again (another microphone,
+    /// output or buffer size), keeping the transport where it is.
+    pub fn reopen_audio(&mut self) -> String {
+        if self.recording.is_some() {
+            self.stop_recording();
+        }
+        let pos = self.engine.position();
+        let latency = self.engine.latency_ms;
+        // the old streams close before the new ones open (some cards
+        // can't be opened twice)
+        self.engine.close();
+        let rate = self.doc.project.sample_rate;
+        let g = MixGraph::build(&self.doc.project, &AssetStore::new(), None, true);
+        self.engine = Engine::with_devices(rate, g, &self.settings.device_choice());
+        self.engine.latency_ms = latency;
+        self.engine.send(Cmd::MonitorMode(self.settings.monitor_mode));
+        self.engine.send(Cmd::Metronome(self.settings.metronome));
+        self.engine.send(Cmd::Bpm(self.doc.project.bpm));
+        let sr = rate as f64;
+        self.engine.send(Cmd::Loop(self.doc.project.loop_region.map(|(a, b)| ((a * sr) as i64, (b * sr) as i64))));
+        self.engine_slots.clear();
+        self.plugins.retain(&[]);
+        self.rebuild_graph();
+        self.engine.seek(pos);
+        self.monitor_sent = None;
+        self.ui_revision += 1;
+        let mut msg = format!(
+            "Micro : {} · Sortie : {}",
+            self.engine.input_name.clone().unwrap_or_else(|| "aucun".into()),
+            self.engine.output_name
+        );
+        if let Some(e) = &self.engine.last_error {
+            msg.push_str(&format!(" ({e})"));
+        }
+        msg
     }
 
     pub fn stop_recording(&mut self) {
@@ -710,6 +775,13 @@ impl Studio {
                 Request::Layout(cmd, tx) => {
                     self.layout_requests.push(cmd);
                     let _ = tx.send(Ok("interface modifiée".into()));
+                }
+                Request::AppState(tx) => {
+                    let _ = tx.send(Ok(crate::appctl::state(self)));
+                }
+                Request::AppAction(v, tx) => {
+                    let _ = tx.send(crate::appctl::action(self, &v));
+                    changed = true;
                 }
                 Request::UndoAi(tx) => {
                     let r = self.doc.undo_last_by(&Actor::Ai).map(|t| {
@@ -984,6 +1056,11 @@ impl Studio {
     /// refresh.
     pub fn tick(&mut self) -> bool {
         let mut changed = false;
+        let mon = self.monitor_target();
+        if self.monitor_sent != Some(mon) {
+            self.monitor_sent = Some(mon);
+            self.engine.monitor(mon);
+        }
         if self.assets.poll() {
             self.rebuild_graph();
             changed = true;

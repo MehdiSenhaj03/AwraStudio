@@ -157,7 +157,168 @@ pub fn definitions() -> Vec<ToolDef> {
             description: "Annule la dernière modification faite par l'IA.",
             parameters: obj(json!({}), &[]),
         },
+        ToolDef {
+            name: "get_app_state",
+            description: "Lit TOUT l'état du logiciel hors projet : transport (lecture, position, boucle, métronome, enregistrement), audio (micro et sortie utilisés, micros et sorties disponibles, niveau du micro, tampon, retour micro et sa latence), sélection, fichier du projet, réglages, apparence, interface (disposition, panneaux), session à plusieurs (code, participants, discussion), historique, exports, imports en cours, projets récents, plateforme.",
+            parameters: obj(json!({}), &[]),
+        },
+        ToolDef {
+            name: "app_action",
+            description: APP_ACTIONS,
+            parameters: obj(json!({"action": {"type": "string"}}), &["action"]),
+        },
+        ToolDef {
+            name: "get_project_full",
+            description: "Le projet complet tel qu'il est enregistré (JSON) : chaque piste, clip (début, offset, longueur, gain, fondus), effet et paramètre, master, paroles (texte), marqueurs, références, variantes, fichiers. Les ids sont des chaînes ; réutilise-les tels quels dans apply_ops.",
+            parameters: obj(json!({}), &[]),
+        },
+        ToolDef {
+            name: "apply_ops",
+            description: OPS_DOC,
+            parameters: obj(json!({"label": {"type": "string"}, "ops": {"type": "array", "items": {"type": "object"}}}), &["ops"]),
+        },
     ]
+}
+
+/// Everything app_action can do (the tool's description).
+pub const APP_ACTIONS: &str = "Fait dans le logiciel tout ce que l'utilisateur pourrait faire à la main. Paramètre `action` plus ceux de l'action :\n\
+Transport : play ; pause ; stop (retour au début) ; seek {time: s} ; set_loop {start, end} ; clear_loop ; metronome {on} ; record {on?: bool, track?} (démarre/arrête une prise).\n\
+Sélection et vue : select_track {track} ; select_clip {track, clip} ; show_master_chain {on} ; zoom {seconds: durée visible} ; scroll_to {time} ; editing {on} (personnalisation de l'interface) ; open_settings {tab: 0 apparence, 1 IA, 2 audio} ; window {state: maximize|minimize|fullscreen|restore}.\n\
+Édition rapide : new_track {kind: vocal|adlib|instrumental|audio, name?} ; split_clip {track, clip?, at: s} ; delete_clip {track, clip}.\n\
+Audio : list_audio_devices ; set_audio {input?: nom|\"system\"|\"none\", output?: nom|\"system\", buffer_frames?: 64|128|256|512|0, monitor_mode?: direct|low_latency|full, monitor_armed?: bool, latency_ms?} (rouvre les périphériques).\n\
+Réglages : set_settings {user_name?, count_in?, try_upnp?, proactive?, sync_transport?}.\n\
+Apparence : set_appearance {theme?: system|light|dark, accent?: violet|bleu|turquoise|vert|orange|rose|rouge|#hex, blur?: bool, preset?: glass|clear|opaque, window?, header?, panels?, cards?, menus?, lanes?: 0..1 ou null pour auto}.\n\
+Fichiers : save {dir?} ; export {path?, format?: wav16|wav24|wav32} ; export_stems {dir?} ; import_audio {paths: [..], track?, at?} ; add_reference {path} ; list_files {dir?, audio_only?} ; new_project ; open_project {path} ; load_demo.\n\
+Historique : undo ; redo.\n\
+Session : host_session ; join_session {code} ; leave_session ; send_chat {text}.\n\
+Divers : scan_plugins ; toast {text} (message à l'écran).";
+
+/// The raw operations (apply_ops' description).
+pub const OPS_DOC: &str = "Applique des opérations brutes sur le projet en UNE transaction annulable (label = ce qui s'affiche). Accès complet au modèle ; lis d'abord get_project_full pour les ids. Chaque op est un objet avec \"op\" :\n\
+set_project {field: {field: name|bpm|key|minor|master_volume_db|loop_region, value}} ; \
+add_track {track: {name, kind, color: \"#hex\", volume_db, pan, mute, solo, armed, effects: [], clips: []}, index} ; remove_track {id} ; move_track {id, index} ; \
+set_track {id, field: {field: name|kind|color|volume_db|pan|mute|solo|armed, value}} ; \
+add_clip {track, clip: {asset, name, start, offset, length, gain_db, fade_in, fade_out, muted}} ; remove_clip {track, clip} ; \
+set_clip {track, clip, field: {field: name|start|offset|length|gain_db|fade_in|fade_out|muted, value}} ; \
+add_effect {target: \"master\" ou nom/id de piste, slot: {kind: gain|eq|compressor|gate|deesser|denoise|reverb|delay|saturation|autotune|limiter|doubler|stereo_width, params: {}, enabled: true}, index} ; remove_effect {target, slot} ; move_effect {target, slot, index} ; \
+set_param {target, slot, param, value} ; set_effect_enabled {target, slot, enabled} ; \
+add_section {section: {title, text, start?}, index} ; remove_section {id} ; move_section {id, index} ; set_section {id, title, text, start} ; \
+add_marker {marker: {name, time}} ; remove_marker {id} ; remove_reference {id} ; remove_variant {id}. \
+Pistes et clips se désignent par id (ou nom pour une piste). Les ids omis pour un nouvel élément sont créés.";
+
+/// Ids travel as strings (u64 is beyond what models copy reliably as
+/// numbers): every id the model reads is a string.
+fn ids_to_strings(v: &mut Value) {
+    match v {
+        Value::Object(m) => {
+            for (k, x) in m.iter_mut() {
+                if matches!(k.as_str(), "id" | "track" | "clip" | "slot") && x.is_u64() {
+                    *x = Value::String(x.to_string());
+                } else {
+                    ids_to_strings(x);
+                }
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(ids_to_strings),
+        _ => {}
+    }
+}
+
+/// ...and back to numbers, with fresh ids where a new element has none.
+fn ids_to_numbers(v: &mut Value, p: &Project) {
+    match v {
+        Value::Object(m) => {
+            // "target": "master" or a track's name or id
+            if let Some(t) = m.get("target").and_then(Value::as_str).map(String::from) {
+                let tv = match resolve_track(p, &t) {
+                    Some(Target::Master) => json!({"type": "master"}),
+                    Some(Target::Track(id)) => json!({"type": "track", "id": id}),
+                    None => json!({"type": "track", "id": t}),
+                };
+                m.insert("target".into(), tv);
+            }
+            for (k, x) in m.iter_mut() {
+                if matches!(k.as_str(), "id" | "track" | "clip" | "slot") {
+                    if let Some(s) = x.as_str() {
+                        if let Ok(n) = s.trim().parse::<u64>() {
+                            *x = json!(n);
+                            continue;
+                        }
+                        // an id by title (a lyrics section, a marker) or a track by name
+                        if k == "id" {
+                            let l = s.to_lowercase();
+                            if let Some(id) = p.lyrics.iter().find(|x| x.title.to_lowercase() == l).map(|x| x.id).or_else(|| p.markers.iter().find(|x| x.name.to_lowercase() == l).map(|x| x.id)) {
+                                *x = json!(id);
+                                continue;
+                            }
+                        }
+                        if let Some(Target::Track(id)) = resolve_track(p, s) {
+                            *x = json!(id);
+                            continue;
+                        }
+                    }
+                }
+                ids_to_numbers(x, p);
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(|x| ids_to_numbers(x, p)),
+        _ => {}
+    }
+}
+
+/// Fills what a model may leave out of a new element (ids, defaults).
+fn complete_op(op: &mut Value) {
+    let Some(kind) = op.get("op").and_then(Value::as_str).map(String::from) else { return };
+    let fill = |o: &mut Value, defaults: Value| {
+        if let (Some(m), Value::Object(d)) = (o.as_object_mut(), defaults) {
+            for (k, v) in d {
+                m.entry(k).or_insert(v);
+            }
+        }
+    };
+    match kind.as_str() {
+        "add_track" => {
+            if let Some(t) = op.get_mut("track") {
+                fill(t, json!({"id": new_id(), "name": "Piste", "kind": "audio", "color": "#7c6cf0", "volume_db": 0.0, "pan": 0.0,
+                               "mute": false, "solo": false, "armed": false, "effects": [], "clips": []}));
+            }
+            fill(op, json!({"index": usize::MAX}));
+        }
+        "add_clip" => {
+            if let Some(c) = op.get_mut("clip") {
+                fill(c, json!({"id": new_id(), "name": "Clip", "offset": 0.0, "gain_db": 0.0, "fade_in": 0.0, "fade_out": 0.0, "muted": false}));
+            }
+        }
+        "add_effect" => {
+            if let Some(sl) = op.get_mut("slot") {
+                // "kind": "eq" as well as {"type": "eq"}
+                let key = sl.get("kind").and_then(|k| k.as_str().or_else(|| k.get("type").and_then(Value::as_str))).map(String::from);
+                if let Some(kind) = key.as_deref().and_then(EffectKind::from_key) {
+                    sl["kind"] = serde_json::to_value(&kind).unwrap_or(Value::Null);
+                }
+                fill(sl, json!({"id": new_id(), "params": {}, "enabled": true, "added_by": {"type": "ai"}}));
+            }
+            fill(op, json!({"index": usize::MAX}));
+        }
+        "add_section" => {
+            if let Some(sc) = op.get_mut("section") {
+                fill(sc, json!({"id": new_id(), "text": "", "start": null}));
+            }
+            fill(op, json!({"index": usize::MAX}));
+        }
+        "add_marker" => {
+            if let Some(m) = op.get_mut("marker") {
+                fill(m, json!({"id": new_id()}));
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn project_full_json(p: &Project) -> Value {
+    let mut v = serde_json::to_value(p).unwrap_or(Value::Null);
+    ids_to_strings(&mut v);
+    v
 }
 
 /// The result of a tool call.
@@ -310,6 +471,39 @@ fn run(name: &str, args: &Value, host: &mut dyn StudioHost) -> Result<ToolOutcom
     let mut out = ToolOutcome::default();
     match name {
         "get_project" => Ok(ToolOutcome::ok(project_json(&p).to_string())),
+        "get_project_full" => Ok(ToolOutcome::ok(project_full_json(&p).to_string())),
+        "get_app_state" => Ok(ToolOutcome::ok(host.app_state()?.to_string())),
+        "app_action" => {
+            let r = host.app_action(args)?;
+            Ok(ToolOutcome::ok(r.to_string()))
+        }
+        "apply_ops" => {
+            let list = args.get("ops").and_then(Value::as_array).ok_or("ops : une liste d'opérations est attendue")?;
+            let mut ops = Vec::new();
+            for (i, o) in list.iter().enumerate() {
+                let mut o = o.clone();
+                ids_to_numbers(&mut o, &p);
+                complete_op(&mut o);
+                // an index past the end means "at the end"
+                if let Some(ix) = o.get("index").and_then(Value::as_u64) {
+                    let len = match o.get("op").and_then(Value::as_str) {
+                        Some("add_track") => p.tracks.len(),
+                        Some("add_section") => p.lyrics.len(),
+                        Some("add_effect") => usize::MAX,
+                        _ => usize::MAX,
+                    };
+                    if len != usize::MAX && ix as usize > len {
+                        o["index"] = json!(len);
+                    }
+                }
+                let op: Op = serde_json::from_value(o.clone()).map_err(|e| format!("opération {} invalide ({e}) : {o}", i + 1))?;
+                ops.push(op);
+            }
+            let label = s(args, "label").unwrap_or("Modification par l'IA").to_string();
+            commit(host, &mut out, &label, ops)?;
+            out.output = json!({"ok": true, "applied": list.len()}).to_string();
+            Ok(out)
+        }
         "analyze_track" => {
             let Target::Track(id) = need_track(&p, args)? else { return host.analyze_mix().map(|a| ToolOutcome::ok(json!({"analysis": a}).to_string())) };
             let a = host.analyze_track(id, b(args, "processed").unwrap_or(false))?;

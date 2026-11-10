@@ -713,7 +713,7 @@ fn release(s: &mut Studio, view: &mut View) {
     view.preview = None;
 }
 
-fn split_at(s: &mut Studio, track: Id, clip: Id, at: f64) {
+pub fn split_at(s: &mut Studio, track: Id, clip: Id, at: f64) {
     let Some(c) = s.doc.project.track(track).and_then(|t| t.clip(clip)).cloned() else { return };
     if at <= c.start + 0.05 || at >= c.end() - 0.05 {
         return;

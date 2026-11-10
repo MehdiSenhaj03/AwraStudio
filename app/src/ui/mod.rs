@@ -2,6 +2,7 @@
 //! user (or the AI) arranges.
 
 pub mod appearance;
+pub mod audio;
 pub mod assistant;
 pub mod browser;
 pub mod effects;
@@ -193,8 +194,12 @@ pub const PRESETS: [(&str, &str, &str); 6] = [
 ];
 
 pub fn new_project(s: &S) {
+    new_project_studio(&mut s.borrow_mut());
+}
+
+pub fn new_project_studio(s: &mut crate::studio::Studio) {
     let doc = studio_core::Document::new(studio_core::Project::new("Sans titre"));
-    s.borrow_mut().set_document(doc);
+    s.set_document(doc);
 }
 
 pub fn preset(name: &str) -> Option<DockNode> {
@@ -220,6 +225,7 @@ pub struct Ui {
     effects: Rc<effects::EffectsPanel>,
     seen_revision: Cell<u64>,
     seen_doc_revision: Cell<u64>,
+    frames: Cell<u64>,
 }
 
 impl Ui {
@@ -276,6 +282,7 @@ impl Ui {
             effects,
             seen_revision: Cell::new(0),
             seen_doc_revision: Cell::new(u64::MAX),
+            frames: Cell::new(0),
         });
         ui.shortcuts(s);
         // files dropped anywhere on the window are imported
@@ -366,12 +373,33 @@ impl Ui {
             let Ok(mut st) = s.try_borrow_mut() else { return };
             st.tick();
             self.timeline.animate(&mut st);
+            // what the interface shows, for the agent (twice a second)
+            let n = self.frames.get() + 1;
+            self.frames.set(n);
+            if n % 30 == 1 {
+                st.ui_info = self.info();
+            }
             (std::mem::take(&mut st.layout_requests), std::mem::take(&mut st.toasts), std::mem::take(&mut st.ui_actions))
         };
         for a in actions {
             match a {
                 crate::studio::UiAction::ImportDialog => self.header.import(s),
                 crate::studio::UiAction::Demo => load_demo(s),
+                crate::studio::UiAction::OpenSettings(tab) => settings_dialog::open_tab(s, &self.window, tab),
+                crate::studio::UiAction::Editing(on) => self.dock.set_editing(on),
+                crate::studio::UiAction::ApplyAppearance => {
+                    let a = s.borrow().settings.appearance.clone();
+                    appearance::apply(&a);
+                }
+                crate::studio::UiAction::Window(w) => match w.as_str() {
+                    "minimize" => self.window.minimize(),
+                    "fullscreen" => self.window.fullscreen(),
+                    "restore" => {
+                        self.window.unfullscreen();
+                        self.window.unmaximize();
+                    }
+                    _ => self.window.maximize(),
+                },
             }
         }
         for cmd in layout {
@@ -390,6 +418,23 @@ impl Ui {
                 p.tick(&st);
             }
         });
+    }
+
+    /// The interface as the agent sees it.
+    fn info(&self) -> serde_json::Value {
+        let d = &self.dock;
+        let shown: Vec<String> = d.panel_ids().into_iter().filter(|(id, _)| d.is_shown(id)).map(|(id, _)| id).collect();
+        let hidden: Vec<String> = d.panel_ids().into_iter().filter(|(id, _)| !d.is_shown(id)).map(|(id, _)| id).collect();
+        serde_json::json!({
+            "layout": d.layout().map(|l| l.to_text()),
+            "panels_shown": shown,
+            "panels_hidden": hidden,
+            "editing": d.is_editing(),
+            "dark": awra::StyleManager::default().is_dark(),
+            "window": {"width": self.window.width(), "height": self.window.height(), "maximized": self.window.is_maximized()},
+            "timeline_width": (self.timeline.widget().width() - 196).max(100),
+            "presets": PRESETS.iter().map(|p| p.0).collect::<Vec<_>>(),
+        })
     }
 
     pub fn timeline_widget(&self) -> Widget {

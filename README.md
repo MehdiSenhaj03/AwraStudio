@@ -34,6 +34,22 @@ serveur**. Construit en Rust sur le framework [Awra](https://github.com/MehdiSen
   code d'invitation. Pistes, prises (les fichiers voyagent), paroles,
   réglages, lecture synchronisée et discussion. Chiffré, pair à pair,
   aucun serveur : les projets restent sur vos machines.
+- **Micro et retour casque** : le bouton micro de la barre du haut (à côté
+  du métronome) choisit le micro et la sortie, montre le niveau du micro
+  en direct et règle le retour : *direct* (ta voix telle quelle, le plus
+  rapide), *effets en faible latence* (autotune à fenêtre courte, le
+  débruiteur s'écarte le temps de la prise) ou *tous les effets*. Petits
+  tampons (128 échantillons par défaut, 64 au plus rapide) : quelques
+  millisecondes entre le micro et le casque, affichées en direct. La prise
+  elle-même est toujours enregistrée brute et traitée en pleine qualité.
+- **Une IA qui a la main sur tout** : en plus du son, l'ingénieur lit
+  l'état complet du logiciel (micro, sortie, latence, lecture, réglages,
+  interface, session, historique, fichiers) et fait tout ce qu'on ferait à
+  la main : « quel micro j'ai ? », « utilise le micro USB », « réduis la
+  latence », « va à 1:20 », « active le métronome », « passe en mode
+  sombre », « sauvegarde », « exporte en WAV 16 bits », « ouvre une
+  session »… et peut retoucher n'importe quel détail du projet (fondus,
+  clips, paroles, pistes, effets) en une modification annulable.
 - **Glisser-déposer** : lâche un ou plusieurs fichiers audio sur une
   piste (ils s'y posent à l'endroit visé, l'un après l'autre) ou sous les
   pistes (chacun devient une nouvelle piste). Pendant le survol, un aperçu

@@ -181,6 +181,15 @@ impl Processor for Autotune {
         }
     }
 
+    fn set_low_latency(&mut self, on: bool) {
+        // the shifter's window is its delay (half on average): 30 ms for
+        // the cleanest shift, 10 ms while singing into it
+        let win = if on { 0.010 } else { 0.03 } * self.sr;
+        for s in &mut self.shifters {
+            s.win = win;
+        }
+    }
+
     fn reset(&mut self) {
         self.ring.fill(0.0);
         self.shift = 0.0;

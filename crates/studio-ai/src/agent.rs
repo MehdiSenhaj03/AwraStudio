@@ -155,6 +155,12 @@ puis affine avec set_effect / set_track.\n\
 et règle-la avec set_song_info.\n\
 - Toute modification est annulable : n'hésite pas à essayer, propose des variantes quand le goût entre en jeu.\n\
 - L'interface est personnalisable : set_layout déplace, affiche, masque ou agrandit les panneaux.\n\
+- Tu as un accès INTÉGRAL au logiciel : get_app_state lit tout (micro et sortie utilisés et disponibles, niveau du micro, \
+latence du retour, lecture, réglages, apparence, session, historique, fichier du projet…) ; app_action fait tout ce que \
+l'utilisateur ferait à la main (lecture, enregistrement, choix du micro, réglages, apparence, enregistrer, exporter, importer, \
+ouvrir, sessions, annuler…) ; get_project_full et apply_ops lisent et modifient n'importe quel détail du projet (clips, fondus, \
+paroles, pistes, effets) en une transaction annulable. Quand on te pose une question sur le studio, lis l'état avant de \
+répondre ; quand on te demande quelque chose, fais-le plutôt que d'expliquer où cliquer.\n\
 - Réponds dans la langue de l'utilisateur, brièvement, avec des mots simples : ce que tu as entendu, ce que tu as fait, \
 et éventuellement une suggestion. Pas de jargon inutile.";
 
@@ -172,11 +178,19 @@ fn http_err(e: ureq::Error) -> String {
     }
 }
 
-fn context_note(host: &dyn StudioHost) -> String {
-    format!("État actuel du projet (JSON) : {}", project_json(&host.project()))
+fn context_note(host: &mut dyn StudioHost) -> String {
+    let mut n = format!("État actuel du projet (JSON) : {}", project_json(&host.project()));
+    // the essentials of the application; get_app_state gives the rest
+    if let Ok(a) = host.app_state() {
+        let brief = json!({"transport": a.get("transport"), "audio": a.get("audio").map(|x| json!({
+            "input": x.get("input"), "output": x.get("output"), "monitor_latency_ms": x.get("monitor_latency_ms")})),
+            "selection": a.get("selection"), "project_file": a.get("project_file")});
+        n.push_str(&format!("\nLogiciel (extrait, get_app_state pour tout) : {brief}"));
+    }
+    n
 }
 
-const MAX_STEPS: usize = 14;
+const MAX_STEPS: usize = 24;
 
 /// One turn of the conversation: the model may call tools several times.
 pub fn run_turn(
@@ -397,7 +411,7 @@ pub fn extract_json(s: &str) -> Option<Value> {
     None
 }
 
-fn cli_prompt(history: &[ChatMessage], request: &str, host: &dyn StudioHost, results: &[String]) -> String {
+fn cli_prompt(history: &[ChatMessage], request: &str, host: &mut dyn StudioHost, results: &[String]) -> String {
     let mut p = String::new();
     p.push_str(SYSTEM_PROMPT);
     p.push_str("\n\nTu pilotes le studio par un protocole JSON. Outils disponibles (nom : description ; paramètres JSON Schema) :\n");

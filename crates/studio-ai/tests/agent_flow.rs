@@ -154,3 +154,42 @@ fn variants_are_comparable() {
     assert!(!o.error, "{}", o.output);
     assert!(!h.doc.project.tracks[1].effects.is_empty());
 }
+
+#[test]
+fn raw_ops_reach_every_detail() {
+    let mut h = host();
+    // what a model would write after reading get_project_full
+    let full = studio_ai::tools::execute("get_project_full", &serde_json::json!({}), &mut h);
+    let v: serde_json::Value = serde_json::from_str(&full.output).unwrap();
+    let voice = v["tracks"][1]["id"].as_str().unwrap().to_string();
+    let clip = v["tracks"][1]["clips"][0]["id"].as_str().unwrap().to_string();
+    let args = serde_json::json!({"label": "Retouches", "ops": [
+        {"op": "set_clip", "track": voice, "clip": clip, "field": {"field": "fade_in", "value": 0.25}},
+        {"op": "set_track", "id": "Adlibs", "field": {"field": "pan", "value": -0.4}},
+        {"op": "add_effect", "target": "master", "slot": {"kind": "eq"}},
+        {"op": "add_effect", "target": "Voix", "slot": {"kind": "deesser", "params": {"amount": 0.7}}, "index": 0},
+        {"op": "add_track", "track": {"name": "Choeurs", "kind": "adlib"}},
+        {"op": "add_section", "section": {"title": "Pont", "text": "la la la"}},
+        {"op": "add_marker", "marker": {"name": "Drop", "time": 12.0}}
+    ]});
+    let o = studio_ai::tools::execute("apply_ops", &args, &mut h);
+    assert!(!o.error, "{}", o.output);
+    assert_eq!(o.committed.len(), 1, "one undoable transaction");
+    let p = &h.doc.project;
+    assert_eq!(p.tracks[1].clips[0].fade_in, 0.25);
+    assert_eq!(p.tracks.iter().find(|t| t.name == "Adlibs").unwrap().pan, -0.4);
+    assert_eq!(p.master.effects.len(), 1);
+    assert_eq!(p.tracks[1].effects[0].kind, EffectKind::DeEsser);
+    assert_eq!(p.tracks[1].effects[0].added_by, Actor::Ai);
+    assert!(p.tracks.iter().any(|t| t.name == "Choeurs" && t.kind == TrackKind::Adlib));
+    assert!(p.lyrics.iter().any(|l| l.title == "Pont"));
+    assert_eq!(p.markers.len(), 1);
+    // all of it undone at once
+    h.doc.undo();
+    assert_eq!(h.doc.project.tracks.len(), 3);
+    assert_eq!(h.doc.project.tracks[1].clips[0].fade_in, 0.0);
+    // a broken op says why, and nothing is applied
+    let bad = studio_ai::tools::execute("apply_ops", &serde_json::json!({"ops": [{"op": "set_track", "id": "Voix", "field": {"field": "volume_db", "value": -3.0}}, {"op": "explode"}]}), &mut h);
+    assert!(bad.error && bad.output.contains("opération 2"), "{}", bad.output);
+    assert_eq!(h.doc.project.tracks[1].volume_db, 0.0);
+}

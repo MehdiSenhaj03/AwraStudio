@@ -70,6 +70,41 @@ ARCHITECTURE.md pour la conception). Pistes pour la suite :
 
 ## Journal
 
+- Micro, retour casque et IA aux pleins pouvoirs (demande : « choix du
+  micro introuvable », « l'IA ne sait pas quel micro j'ai, donne-lui un
+  accès intégral », « retour micro le plus instantané possible ») :
+  - Moteur : `list_devices()`, `Engine::with_devices(DeviceChoice)` (micro
+    et sortie par nom, aucun micro, taille de tampon), `close()` puis
+    réouverture à chaud (`Studio::reopen_audio`, position conservée).
+    `AWRA_STUDIO_FAKE_DEVICES="a;b|c;d"` simule des périphériques (tests,
+    captures).
+  - Retour micro : tampons fixes (128 par défaut, 64/256/512, repli sur la
+    taille de la carte si refusée) en entrée et en sortie ; anneau de
+    retour gardé à une période d'entrée au plus (avant : jusqu'à 3 blocs) ;
+    plus de blocs de 512 au rééchantillonnage de sortie ; retour aussi
+    quand le micro tourne à une autre fréquence (interpolation, avant : pas
+    de retour du tout) ; trois modes (`Cmd::MonitorMode`) : direct (après
+    la chaîne, 0 échantillon de retard), faible latence (par défaut :
+    `Processor::set_low_latency` → le débruiteur, 21 ms, s'écarte ;
+    l'autotune passe d'une fenêtre de 30 à 10 ms), complet. Latence
+    affichée (`Engine::monitor_latency_ms`). Option « m'entendre hors
+    prise » (piste armée ou voix sélectionnée). Test
+    `the_voice_comes_back_at_once`.
+  - Interface : bouton micro dans la barre du haut (popover : micro,
+    niveau en direct, sortie, retour, tampon, latence) ; les mêmes
+    contrôles dans Réglages → Audio et session.
+  - IA : `get_app_state` (tout l'état hors projet, périphériques listés
+    sur le fil de l'agent), `app_action` (≈ 45 actions : transport,
+    enregistrement, sélection, vue, audio, réglages, apparence, fichiers,
+    historique, session, plugins, fenêtre ; `appctl.rs`),
+    `get_project_full` et `apply_ops` (toutes les `Op` en JSON, ids en
+    chaînes, noms acceptés pour pistes/sections/marqueurs, une transaction
+    annulable). Consignes système mises à jour, 24 étapes par tour, extrait
+    de l'état du logiciel dans le contexte. L'ingénieur local comprend les
+    demandes sur le logiciel (micro, sortie, latence, lecture, position,
+    métronome, enregistrer, sauvegarder, exporter, thème…). Tests
+    `raw_ops_reach_every_detail`, `the_engineer_sees_and_drives_the_whole_app`.
+
 - Audit visuel complet (demande : « plus aucun bug visuel, artefact,
   élément mal placé »). Outils : le mode capture (`--screenshot`, avec
   maintenant `--size WxH` réellement appliqué, `--dock "<disposition>"`,
