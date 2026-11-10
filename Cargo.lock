@@ -308,6 +308,13 @@ version = "0.1.0"
 [[package]]
 name = "studio-analysis"
 version = "0.1.0"
+dependencies = [
+ "rustfft",
+ "serde",
+ "serde_json",
+ "studio-core",
+ "studio-dsp",
+]
 
 [[package]]
 name = "studio-collab"
