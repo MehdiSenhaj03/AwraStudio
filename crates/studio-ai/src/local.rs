@@ -243,7 +243,7 @@ pub fn plan(p: &Project, request: &str, selected: Option<Id>) -> Vec<Step> {
             } else if has(&t, &["naturel", "leger", "discret", "subtil", "transparent"]) {
                 (0.35, 0.7, "naturel et discret")
             } else {
-                (0.85, 1.0, "bien calibré sur la tonalité")
+                (0.85, 1.0, "bien calibré")
             };
             let mut params = json!({"speed": speed, "amount": amount});
             if let Some(k) = p.key {
@@ -252,7 +252,19 @@ pub fn plan(p: &Project, request: &str, selected: Option<Id>) -> Vec<Step> {
             } else {
                 params["scale"] = json!(2);
             }
-            steps.push(step("set_effect", json!({"track": ids, "effect": "autotune", "params": params}), format!("Autotune {what} sur « {name} »{}.", if p.key.is_none() { " (tonalité inconnue : gamme chromatique — dis-moi la tonalité ou demande-moi de la détecter)" } else { "" })));
+            let beat = p.tracks.iter().find(|t| t.kind == TrackKind::Instrumental && !t.clips.is_empty());
+            let note = match (p.key, beat) {
+                (Some(_), _) => "",
+                (None, Some(_)) => "",
+                (None, None) => " (tonalité inconnue : gamme chromatique — dis-moi la tonalité)",
+            };
+            steps.push(step("set_effect", json!({"track": ids, "effect": "autotune", "params": params}), format!("Autotune {what} sur « {name} »{note}.")));
+            if let (None, Some(b)) = (p.key, beat) {
+                // calibrate on the beat's key (set_song_info retunes the autotunes)
+                if !steps.iter().any(|s| s.tool == "analyze_track" && s.args["track"] == json!(b.id.to_string())) {
+                    steps.push(step("analyze_track", json!({"track": b.id.to_string()}), "Je cale l'autotune sur la tonalité de l'instru."));
+                }
+            }
         }
         if has(&t, &["etouffe", "sourd", "terne", "eteint", "manque d'aigu", "pas clair", "pas assez clair", "muffled", "dull", "derriere un mur"]) {
             let eq = chain_has(p, *id, &EffectKind::Eq);
@@ -330,7 +342,9 @@ pub fn run(host: &mut dyn StudioHost, request: &str, selected: Option<Id>) -> (S
         }
         // add what the tools found
         if let Ok(v) = serde_json::from_str::<Value>(&o.output) {
-            if let Some(d) = v.get("diagnostic") {
+            // listening to the beat for its key: its diagnostic is noise here
+            let key_only = st.tool == "analyze_track" && v.pointer("/analysis/tempo_bpm").is_some_and(|t| t.is_number());
+            if let Some(d) = v.get("diagnostic").filter(|_| !key_only) {
                 match d {
                     Value::String(s) if !s.is_empty() => lines.push(s.clone()),
                     Value::Array(a) if !a.is_empty() => {

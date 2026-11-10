@@ -409,6 +409,31 @@ mod tests {
     }
 
     #[test]
+    fn key_of_a_chord_progression() {
+        // Am F C G pads with a bass, eight bars at 92 BPM
+        let sr = sr();
+        let beat = 60.0 / 92.0;
+        let chords = [[57.0f32, 60.0, 64.0], [53.0, 57.0, 60.0], [48.0, 52.0, 55.0], [55.0, 59.0, 62.0]];
+        let hz = |m: f32| 440.0 * 2f32.powf((m - 69.0) / 12.0);
+        let n = (32.0 * beat * sr as f32) as usize;
+        let x: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / sr as f32;
+                let ch = chords[((t / beat / 4.0) as usize) % 4];
+                let mut s = (2.0 * std::f32::consts::PI * hz(ch[0] - 12.0) * t).sin() * 0.2;
+                for m in ch {
+                    let f = hz(m);
+                    s += (2.0 * std::f32::consts::PI * f * t).sin() * 0.06 + (2.0 * std::f32::consts::PI * 2.0 * f * t).sin() * 0.02;
+                }
+                s
+            })
+            .collect();
+        let a = analyze(&AudioBuffer::from_mono(sr, x), false);
+        let (k, minor) = a.key.unwrap();
+        assert!((k, minor) == (9, true) || (k, minor) == (0, false), "got {k} {minor}");
+    }
+
+    #[test]
     fn key_of_a_minor_triad() {
         let mut c = [0.0f32; 12];
         c[9] = 1.0; // A

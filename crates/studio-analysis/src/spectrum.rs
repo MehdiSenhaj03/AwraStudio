@@ -20,35 +20,41 @@ pub const BANDS: [(&str, f32, f32); 8] = [
 
 /// Average power spectrum of the louder frames (FFT bins 0..=FFT/2).
 pub fn average_spectrum(x: &[f32], sr: u32) -> Vec<f32> {
+    average_spectrum_n(x, sr, FFT)
+}
+
+/// The same with another FFT size (a long one resolves low notes).
+pub fn average_spectrum_n(x: &[f32], sr: u32, n_fft: usize) -> Vec<f32> {
+        let fft_len = n_fft;
     let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(FFT);
+    let fft = planner.plan_fft_forward(fft_len);
     let win: Vec<f32> =
-        (0..FFT).map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / FFT as f32).cos()).collect();
-    let mut acc = vec![0.0f64; FFT / 2 + 1];
+        (0..fft_len).map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / fft_len as f32).cos()).collect();
+    let mut acc = vec![0.0f64; fft_len / 2 + 1];
     let mut frames = Vec::new();
     let mut i = 0;
-    while i + FFT <= x.len() {
-        let rms = (x[i..i + FFT].iter().map(|s| s * s).sum::<f32>() / FFT as f32).sqrt();
+    while i + fft_len <= x.len() {
+        let rms = (x[i..i + fft_len].iter().map(|s| s * s).sum::<f32>() / fft_len as f32).sqrt();
         frames.push((i, rms));
-        i += FFT / 2;
+        i += fft_len / 2;
     }
     if frames.is_empty() {
-        return vec![0.0; FFT / 2 + 1];
+        return vec![0.0; fft_len / 2 + 1];
     }
     // ignore silence: frames within 30 dB of the loudest
     let max = frames.iter().map(|f| f.1).fold(0.0f32, f32::max);
     let gate = max * 0.0316;
-    let mut buf = vec![Complex::new(0.0f32, 0.0); FFT];
+    let mut buf = vec![Complex::new(0.0f32, 0.0); fft_len];
     let mut n = 0;
     for (start, rms) in frames {
         if rms < gate || rms < 1e-5 {
             continue;
         }
-        for k in 0..FFT {
+        for k in 0..fft_len {
             buf[k] = Complex::new(x[start + k] * win[k], 0.0);
         }
         fft.process(&mut buf);
-        for k in 0..=FFT / 2 {
+        for k in 0..=fft_len / 2 {
             acc[k] += buf[k].norm_sqr() as f64;
         }
         n += 1;
@@ -115,20 +121,35 @@ pub fn centroid(spec: &[f32], sr: u32) -> f32 {
     }
 }
 
-/// Pitch class profile (12 bins, C first) of a signal.
+/// Pitch class profile (12 bins, C first) of a signal: the spectral
+/// peaks between 65 Hz and 2 kHz (partials of notes, not noise or drums),
+/// each weighted by how close it is to an equal-tempered pitch.
 pub fn chroma(x: &[f32], sr: u32) -> [f32; 12] {
-    let spec = average_spectrum(x, sr);
-    let hz = sr as f32 / FFT as f32;
+    const N: usize = 16384;
+    let spec = average_spectrum_n(x, sr, N);
+    let hz = sr as f32 / N as f32;
+    let mag: Vec<f32> = spec.iter().map(|p| p.sqrt()).collect();
+    let lo = (100.0 / hz) as usize;
+    let hi = ((2000.0 / hz) as usize).min(mag.len() - 2);
+    let mut sorted: Vec<f32> = mag[lo..hi].to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let floor = sorted.get(sorted.len() * 3 / 4).copied().unwrap_or(0.0);
     let mut c = [0.0f32; 12];
-    for (k, &p) in spec.iter().enumerate().skip(1) {
-        let f = k as f32 * hz;
-        if !(80.0..=5000.0).contains(&f) {
+    for k in lo.max(1)..hi {
+        let m = mag[k];
+        if m <= floor || m < mag[k - 1] || m < mag[k + 1] {
             continue;
         }
+        // parabolic peak position
+        let (a, b, g) = (mag[k - 1], m, mag[k + 1]);
+        let d = (a - g) / (2.0 * (a - 2.0 * b + g)).min(-1e-12);
+        let f = (k as f32 + d.clamp(-0.5, 0.5)) * hz;
         let midi = 69.0 + 12.0 * (f / 440.0).log2();
-        let pc = (midi.round() as i32).rem_euclid(12) as usize;
-        // magnitude (not power) keeps strong partials from dominating
-        c[pc] += p.sqrt();
+        let off = (midi - midi.round()).abs();
+        let w = (1.0 - off * 2.0).max(0.0);
+        // lower partials say more about the note than the upper ones
+        let weight = (m - floor) * w / (1.0 + f / 1000.0);
+        c[(midi.round() as i32).rem_euclid(12) as usize] += weight;
     }
     c
 }
