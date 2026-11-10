@@ -270,6 +270,7 @@ impl Ui {
         let (layout, toasts) = {
             let Ok(mut st) = s.try_borrow_mut() else { return };
             st.tick();
+            timeline::follow(&mut st, self.timeline.width());
             (std::mem::take(&mut st.layout_requests), std::mem::take(&mut st.toasts))
         };
         for cmd in layout {
@@ -342,6 +343,6 @@ impl Ui {
                 });
             }
         }
-        let _ = (&self.timeline, &self.effects);
+        let _ = &self.effects;
     }
 }

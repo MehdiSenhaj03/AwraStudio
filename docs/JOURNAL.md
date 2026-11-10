@@ -58,9 +58,27 @@ le travail après une perte de contexte).
 
 ## État d'avancement
 
+Toutes les briques sont livrées et testées (voir README.md pour l'usage,
+ARCHITECTURE.md pour la conception). Pistes pour la suite :
+- éditeur graphique VST3 intégré (IPlugView) ; fenêtres CLAP embarquées ;
+- pré-roll / décompte avant enregistrement, comping de prises ;
+- voix temps réel entre participants (Opus) et relais de NAT (STUN) ;
+- export MP3/FLAC ; stems ;
+- assistant créatif (toplines, flows, harmonies) en plus de l'ingénieur.
+
 (voir la section « Journal » plus bas, la plus récente en haut)
 
 ## Journal
+
+- Passe de finition (54 tests, 0 avertissement) : correctif framework
+  (un enfant retiré redevient child-visible, comme gtk_widget_unparent ;
+  panneaux du Dock rétrécissables), détection de tonalité par pics
+  spectraux sur FFT 16384 (test sur une grille d'accords), autotune calé
+  automatiquement sur la tonalité de l'instru, tests des boucles d'agent
+  contre un faux serveur HTTP (Anthropic, OpenAI-compatible, repli local,
+  pont CLI), menu de piste, boucle (Maj+glisser la règle), sauvegarde auto,
+  suivi de la tête de lecture, connexion de session en arrière-plan,
+  arrêt propre de l'hôte. Build Windows MinGW croisé testé sous Wine.
 
 - App fonctionnelle et testée : `cargo test -p awra-studio` (4 tests :
   edits/undo/moteur, tour d'IA via worker, export WAV, DEUX studios en

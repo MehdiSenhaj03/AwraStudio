@@ -24,10 +24,6 @@ impl AssetCache {
         AssetCache { store: AssetStore::new(), peaks: HashMap::new(), loading: HashSet::new(), tx, rx, errors: Vec::new() }
     }
 
-    pub fn has(&self, id: &str) -> bool {
-        self.store.contains_key(id)
-    }
-
     pub fn is_loading(&self) -> bool {
         !self.loading.is_empty()
     }

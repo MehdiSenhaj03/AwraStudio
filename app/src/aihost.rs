@@ -2,7 +2,7 @@
 //! through requests answered on the UI thread. Listening (rendering and
 //! analysis) happens on the worker, from snapshots.
 
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Sender};
 use studio_ai::host::{LayoutCommand, PluginDesc, StudioHost};
 use studio_ai::{ChatMessage, ProviderConfig, TurnResult};
 use studio_analysis::Analysis;
@@ -147,5 +147,3 @@ pub fn spawn_take_note(take: studio_dsp::AudioBuffer, track_name: String, out: S
         let _ = out.send(AiMsg::Note(studio_ai::agent::after_recording_note(&track_name, &a)));
     });
 }
-
-pub type AiChannels = (Sender<Request>, Receiver<Request>, Sender<AiMsg>, Receiver<AiMsg>);

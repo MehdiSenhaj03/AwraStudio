@@ -462,6 +462,7 @@ impl Studio {
         }
     }
 
+    #[allow(dead_code)]
     pub fn stop(&mut self) {
         if self.recording.is_some() {
             self.stop_recording();

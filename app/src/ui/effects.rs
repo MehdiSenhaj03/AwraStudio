@@ -18,7 +18,7 @@ enum Control {
     Slider(awra::Slider, awra::Label, effects::ParamSpec),
     Choice(awra::Dropdown),
     Toggle(awra::Switch),
-    Plugin(awra::Slider, awra::Label, f64, f64),
+    Plugin(awra::Slider, f64, f64),
 }
 
 pub struct EffectsPanel {
@@ -335,7 +335,7 @@ impl EffectsPanel {
                             val2.set_text(&inst2.value_text(&pid, v).unwrap_or(format!("{v:.2}")));
                             c.borrow_mut().commit_ops("Réglage du plugin", vec![Op::SetParam { target, slot: sid, param: pid.clone(), value: v }]);
                         });
-                        self.controls.borrow_mut().insert((sid, p.id.clone()), Control::Plugin(sl, val, p.min, span));
+                        self.controls.borrow_mut().insert((sid, p.id.clone()), Control::Plugin(sl, p.min, span));
                         row += 1;
                     }
                     if inst.has_gui() {
@@ -449,7 +449,7 @@ impl EffectsPanel {
                         }
                     }
                     Control::Toggle(sw) => sw.set_active(slot.param(pid) >= 0.5),
-                    Control::Plugin(sl, _, min, span) => {
+                    Control::Plugin(sl, min, span) => {
                         if let Some(v) = slot.params.get(pid) {
                             let n = (v - min) / span;
                             if (sl.value() - n).abs() > 1e-6 {

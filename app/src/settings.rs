@@ -74,6 +74,7 @@ impl Settings {
 }
 
 /// Where songs go by default.
+#[allow(dead_code)]
 pub fn music_dir() -> PathBuf {
     dirs::audio_dir().or_else(dirs::home_dir).unwrap_or_else(std::env::temp_dir).join("Awra Studio")
 }
