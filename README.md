@@ -14,7 +14,8 @@ serveur**. Construit en Rust sur le framework [Awra](../README.md).
   la fenêtre (son tempo et sa tonalité sont détectés), arme une piste,
   appuie sur `R`, chante. « Finaliser le morceau » traite les voix, fait de
   la place dans l'instru, équilibre et masterise : un vrai rendu, pas une
-  maquette. Export WAV 16/24/32 bits avec mesure LUFS / true peak.
+  maquette. Export WAV 16/24/32 bits avec mesure LUFS / true peak, et
+  export des pistes séparées (stems) calées sur le début.
 - **Parler à l'ingénieur IA** : « rends ma voix plus propre », « mets un
   autotune bien calibré », « ma voix est étouffée », « fais ressortir les
   adlibs », « mixe nos deux voix », « fais un mastering propre », « essaie
@@ -115,6 +116,14 @@ effets, paroles, références, variantes) et `assets/` (les fichiers audio,
 nommés par leur empreinte BLAKE3 : une prise partagée en session n'est
 stockée qu'une fois). Enregistrement automatique toutes les deux minutes
 une fois le projet enregistré.
+
+## En images
+
+| Mixage (thème sombre) | L'IA réorganise l'interface | Session à plusieurs |
+| --- | --- | --- |
+| ![](docs/screenshots/mixage-sombre.png) | ![](docs/screenshots/ia-interface.png) | ![](docs/screenshots/session.png) |
+
+La même interface sous Windows : [docs/screenshots/windows-wine.png](docs/screenshots/windows-wine.png).
 
 ## Documentation
 
