@@ -1,0 +1,13 @@
+[package]
+name = "studio-core"
+description = "Awra Studio: project model, operations, undo/redo and persistence"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+fastrand.workspace = true
+blake3.workspace = true
