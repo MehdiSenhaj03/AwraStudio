@@ -1,7 +1,18 @@
 [package]
 name = "studio-collab"
+description = "Awra Studio: peer-to-peer live collaboration (host-sequenced ops, file sync, transport sync, chat), encrypted, serverless"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+studio-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+blake3.workspace = true
+fastrand.workspace = true
+chacha20poly1305 = "0.10"
+igd-next = "0.14"

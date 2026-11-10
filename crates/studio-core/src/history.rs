@@ -99,6 +99,15 @@ impl Document {
         Ok(tx)
     }
 
+    /// Like [`Document::commit`], also returning the inverse transaction
+    /// (collaboration rebases unacknowledged changes with it).
+    pub fn commit_inv(&mut self, tx: Transaction) -> Result<(Transaction, Transaction), OpError> {
+        let inverse = tx.apply(&mut self.project)?;
+        self.history.record(tx.clone(), inverse.clone());
+        self.touch();
+        Ok((tx, inverse))
+    }
+
     /// Applies a transaction coming from a collaborator: not undoable
     /// locally (each participant undoes their own work).
     pub fn apply_remote(&mut self, tx: &Transaction) -> Result<(), OpError> {

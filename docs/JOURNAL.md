@@ -62,6 +62,16 @@ le travail après une perte de contexte).
 
 ## Journal
 
+- `studio-collab` terminé (5 tests : loopback hôte/invité, mauvais code
+  refusé, convergence de modifs concurrentes). API : `Session::host(name,
+  port, upnp)` → `invite` (code `AWRA-<adresses base32>-<secret 16 car.>`),
+  `Session::join(code, name)`, `poll()` → `Event` (Welcome, Remote, Ack,
+  WantsProject [l'hôte répond `welcome(peer, project, seq)`], WantsAsset,
+  Asset, Transport{delay_ms}, Chat, Peers…). `Replica` (rebase des modifs
+  locales non acquittées via inverses) : l'app DOIT passer toutes ses
+  modifs par `replica.local(doc, tx)` puis `session.propose(tx)`.
+  `Document::commit_inv` ajouté au core. Découverte LAN par UDP 47801.
+
 - `studio-ai` terminé (10 tests dont 3 d'intégration : document réel →
   rendu → analyse → actions → undo). Points clés :
   - `host::StudioHost` = ce que l'app doit fournir (project, analyses,
