@@ -33,6 +33,7 @@ impl PluginsPanel {
         top.append(&scan);
         root.append(&top);
         let search = awra::SearchEntry::new();
+        search.set_placeholder_text(Some("Filtrer les plugins…"));
         root.append(&search);
         let list = awra::Box::new(Orientation::Vertical, 4);
         root.append(&super::scrolled(&list));

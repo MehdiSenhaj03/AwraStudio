@@ -196,7 +196,7 @@ pub fn run_turn(
     match r {
         Ok(t) => t,
         Err(reason) => {
-            let (reply, committed) = crate::local::run(host, request, selected);
+            let (reply, committed) = crate::local::run_with_progress(host, request, selected, progress);
             TurnResult {
                 reply,
                 committed,

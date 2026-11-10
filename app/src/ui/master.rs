@@ -72,9 +72,16 @@ impl MasterPanel {
             st.ui_revision += 1;
         });
         m.append(&edit);
+        let level = awra::Box::new(Orientation::Horizontal, 8);
+        let ll = label("Sortie", Typography::Label);
         let meter = LevelMeter::new(Orientation::Horizontal);
-        meter.as_ref().set_size_request(-1, 12);
-        m.append(&meter);
+        meter.as_ref().set_size_request(-1, 10);
+        meter.as_ref().set_hexpand(true);
+        meter.as_ref().set_valign(awra::Align::Center);
+        meter.as_ref().set_tooltip_text(Some("Niveau de sortie du master (gauche / droite)"));
+        level.append(&ll);
+        level.append(&meter);
+        m.append(&level);
         root.append(&m);
 
         let e = section("Export");
@@ -150,10 +157,12 @@ impl Panel for MasterPanel {
     }
 
     fn tick(&self, s: &Studio) {
+        let live = s.engine.is_playing() || s.recording.is_some();
         if let Some(m) = s.engine.shared.meters.try_lock() {
-            self.meter.set_levels(m.master.0, m.master.1);
+            let (l, r) = if live { m.master } else { (0.0, 0.0) };
+            self.meter.set_levels(l, r);
             let gr = m.reductions.iter().filter(|r| s.doc.project.master.effects.iter().any(|e| e.id == r.0)).map(|r| r.1).fold(0.0f32, f32::max);
-            self.meter.set_reduction(gr);
+            self.meter.set_reduction(if live { gr } else { 0.0 });
         }
     }
 }

@@ -21,19 +21,40 @@ pub struct HeaderUi {
     window: awra::Window,
 }
 
-fn popover_menu(anchor: &awra::Button, items: Vec<(&str, Box<dyn Fn()>)>) {
+/// A menu entry: "" is a separator, "#Title" a section title; `check`
+/// shows a tick column (Some(true) ticked).
+struct Entry {
+    text: String,
+    key: Option<&'static str>,
+    check: Option<bool>,
+    f: Box<dyn Fn()>,
+}
+
+fn entry(text: &str, f: Box<dyn Fn()>) -> Entry {
+    Entry { text: text.to_string(), key: None, check: None, f }
+}
+
+fn popover_menu(anchor: &awra::Button, items: Vec<Entry>) {
     let pop = awra::Popover::new();
     let col = awra::Box::new(Orientation::Vertical, 2);
     col.set_margins(6, 6, 6, 6);
     let pop2 = pop.clone();
-    for (text, f) in items {
+    for Entry { text, key, check, f } in items {
         if text.is_empty() {
             col.append(&awra::Separator::new(Orientation::Horizontal));
             continue;
         }
-        let b = awra::Button::with_label(text);
-        b.set_appearance(ButtonAppearance::Ghost);
-        b.set_halign(awra::Align::Fill);
+        if let Some(t) = text.strip_prefix('#') {
+            let l = super::label(t, awra::Typography::Eyebrow);
+            l.set_xalign(0.0);
+            l.set_margins(4, 10, 2, 10);
+            col.append(&l);
+            continue;
+        }
+        let b = match check {
+            Some(on) => super::menu_check_item(&text, on),
+            None => super::menu_item(&text, key),
+        };
         let p = pop2.clone();
         b.connect_clicked(move |_| {
             p.popdown();
@@ -133,42 +154,49 @@ impl HeaderUi {
         let l2 = layout.clone();
         let win = window.clone();
         layout.connect_clicked(move |_| {
-            let mut items: Vec<(&str, Box<dyn Fn()>)> = Vec::new();
+            let mut items: Vec<Entry> = vec![entry("#Disposition", Box::new(|| {}))];
             for (key, name, _) in PRESETS.iter() {
                 let d = d.clone();
-                items.push((name, Box::new(move || {
+                items.push(entry(name, Box::new(move || {
                     if let Some(p) = preset(key) {
                         d.set_layout(p);
                     }
                 })));
             }
-            items.push(("", Box::new(|| {})));
+            items.push(entry("", Box::new(|| {})));
             let (c3, w3) = (c.clone(), win.clone());
-            items.push(("Apparence et transparence…", Box::new(move || super::settings_dialog::open_appearance(&c3, &w3))));
+            items.push(entry("Apparence et transparence…", Box::new(move || super::settings_dialog::open_appearance(&c3, &w3))));
             let d2 = d.clone();
             let c2 = c.clone();
-            items.push((
-                if d.is_editing() { "Terminer la personnalisation" } else { "Personnaliser l'interface…" },
-                Box::new(move || {
+            items.push(Entry {
+                text: (if d.is_editing() { "Terminer la personnalisation" } else { "Personnaliser l'interface…" }).into(),
+                key: Some("Ctrl+E"),
+                check: None,
+                f: Box::new(move || {
                     let on = !d2.is_editing();
                     d2.set_editing(on);
                     if on {
                         c2.borrow_mut().toasts.push("Chaque panneau a maintenant une barre : déplace-le, agrandis-le ou masque-le".into());
                     }
                 }),
-            ));
-            items.push(("", Box::new(|| {})));
+            });
+            items.push(entry("", Box::new(|| {})));
+            items.push(entry("#Panneaux", Box::new(|| {})));
             for (id, title) in d.panel_ids() {
                 let shown = d.is_shown(&id);
                 let d3 = d.clone();
-                let text: &'static str = Box::leak(format!("{} {}", if shown { "✓" } else { "  " }, title).into_boxed_str());
-                items.push((text, Box::new(move || {
-                    if d3.is_shown(&id) {
-                        d3.hide(&id)
-                    } else {
-                        d3.show(&id)
-                    }
-                })));
+                items.push(Entry {
+                    text: title,
+                    key: None,
+                    check: Some(shown),
+                    f: Box::new(move || {
+                        if d3.is_shown(&id) {
+                            d3.hide(&id)
+                        } else {
+                            d3.show(&id)
+                        }
+                    }),
+                });
             }
             popover_menu(&l2, items);
         });
@@ -181,20 +209,17 @@ impl HeaderUi {
                 let c = c.clone();
                 Box::new(move || f(&ui, &c))
             };
-            let items: Vec<(&str, Box<dyn Fn()>)> = vec![
-                ("Nouveau projet", mk(Box::new(|_, s| {
-                    let mut st = s.borrow_mut();
-                    let doc = studio_core::Document::new(studio_core::Project::new("Sans titre"));
-                    st.set_document(doc);
-                }))),
-                ("Ouvrir un projet…", mk(Box::new(|ui, s| ui.open(s)))),
-                ("Projet de démonstration", mk(Box::new(|_, s| super::load_demo(s)))),
-                ("", Box::new(|| {})),
-                ("Enregistrer", mk(Box::new(|ui, s| ui.save(s, false)))),
-                ("Enregistrer sous…", mk(Box::new(|ui, s| ui.save(s, true)))),
-                ("", Box::new(|| {})),
-                ("Importer de l'audio…", mk(Box::new(|ui, s| ui.import(s)))),
-                ("Réglages…", mk(Box::new(|ui, s| super::settings_dialog::open(s, &ui.window)))),
+            let k = |text: &str, key: Option<&'static str>, f: Box<dyn Fn()>| Entry { text: text.into(), key, check: None, f };
+            let items = vec![
+                k("Nouveau projet", Some("Ctrl+N"), mk(Box::new(|_, s| super::new_project(s)))),
+                k("Ouvrir un projet…", Some("Ctrl+O"), mk(Box::new(|ui, s| ui.open(s)))),
+                k("Projet de démonstration", None, mk(Box::new(|_, s| super::load_demo(s)))),
+                k("", None, Box::new(|| {})),
+                k("Enregistrer", Some("Ctrl+S"), mk(Box::new(|ui, s| ui.save(s, false)))),
+                k("Enregistrer sous…", None, mk(Box::new(|ui, s| ui.save(s, true)))),
+                k("", None, Box::new(|| {})),
+                k("Importer de l'audio…", Some("Ctrl+I"), mk(Box::new(|ui, s| ui.import(s)))),
+                k("Réglages…", Some("Ctrl+,"), mk(Box::new(|ui, s| super::settings_dialog::open(s, &ui.window)))),
             ];
             popover_menu(&f2, items);
         });

@@ -23,6 +23,7 @@ impl BrowserPanel {
     pub fn new(s: &S, window: &awra::Window) -> Rc<BrowserPanel> {
         let root = awra::Box::new(Orientation::Vertical, 10);
         root.set_margins(12, 14, 12, 14);
+        root.append(&label("Fichiers & références", Typography::Title3));
         let content = awra::Box::new(Orientation::Vertical, 14);
         let f = section("Fichiers du projet");
         let files = awra::Box::new(Orientation::Vertical, 4);

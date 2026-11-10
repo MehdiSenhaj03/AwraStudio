@@ -14,6 +14,8 @@ use studio_core::ops::{chain, Op, Target, TrackField};
 use super::{button, label, scrolled, updating, Panel, S};
 use crate::studio::Studio;
 
+const PARAM_LABEL_W: i32 = 118;
+
 enum Control {
     Slider(awra::Slider, awra::Label, effects::ParamSpec),
     Choice(awra::Dropdown),
@@ -30,6 +32,7 @@ pub struct EffectsPanel {
     volume: awra::Slider,
     volume_label: awra::Label,
     pan: awra::Slider,
+    pan_label: awra::Label,
     list: awra::Box,
     add: awra::Button,
     controls: RefCell<HashMap<(Id, String), Control>>,
@@ -139,7 +142,10 @@ impl EffectsPanel {
         quick.set_column_spacing(6);
         quick.set_max_children_per_line(6);
         quick.set_halign(awra::Align::Start);
-        root.append(&quick);
+        // everything between the title and the add button scrolls: a short
+        // panel still reaches every control
+        let body = awra::Box::new(Orientation::Vertical, 8);
+        body.append(&quick);
 
         let track_row = awra::Box::new(Orientation::Horizontal, 8);
         let vl = label("Volume", Typography::Label);
@@ -152,13 +158,15 @@ impl EffectsPanel {
         let pan = awra::Slider::with_range(Orientation::Horizontal, -1.0, 1.0, 0.01);
         pan.set_draw_value(false);
         pan.set_size_request(110, -1);
+        pan.set_origin(0.0);
         for w in [super::wd(&vl), super::wd(&volume), super::wd(&volume_label), super::wd(&pl), super::wd(&pan)] {
             track_row.append(w);
         }
-        root.append(&track_row);
+        body.append(&track_row);
 
         let list = awra::Box::new(Orientation::Vertical, 8);
-        root.append(&scrolled(&list));
+        body.append(&list);
+        root.append(&scrolled(&body));
 
         let add = button("Ajouter un effet", Some("list-add-symbolic"), ButtonAppearance::Secondary);
         add.set_halign(awra::Align::Start);
@@ -173,6 +181,7 @@ impl EffectsPanel {
             volume: volume.clone(),
             volume_label,
             pan: pan.clone(),
+            pan_label: pl.clone(),
             list,
             add: add.clone(),
             controls: RefCell::new(HashMap::new()),
@@ -243,12 +252,13 @@ impl EffectsPanel {
         };
         self.title.set_text(&name);
         self.pan.set_visible(kind.is_some());
+        self.pan_label.set_visible(kind.is_some());
 
         // quick AI actions
         let quick: Vec<(&str, String)> = match kind {
             Some(TrackKind::Instrumental) => vec![("Faire de la place aux voix", format!("rends l'instru {name} moins envahissant : baisse-le de 3 dB"))],
             Some(_) => vec![
-                ("Propre", format!("rends la voix {name} plus propre")),
+                ("Propre", format!("rends {name} plus propre")),
                 ("Mélodique", format!("rendu mélodique sur {name}")),
                 ("Autotune", format!("autotune bien calibré sur {name}")),
                 ("Agressive", format!("rendu agressif sur {name}")),
@@ -388,7 +398,12 @@ impl EffectsPanel {
                         sl.set_value((v - p.min) / span);
                         let val = label(&inst.value_text(&p.id, v).unwrap_or(format!("{v:.2}")), Typography::Label);
                         val.set_width_chars(9);
-                        grid.attach(&label(&p.name, Typography::Label), 0, row, 1, 1);
+                        let pl = label(&p.name, Typography::Label);
+                        pl.set_size_request(PARAM_LABEL_W, -1);
+                        pl.set_xalign(0.0);
+                        pl.set_ellipsize(awra::pango::EllipsizeMode::End);
+                        pl.set_max_width_chars(18);
+                        grid.attach(&pl, 0, row, 1, 1);
                         grid.attach(&sl, 1, row, 1, 1);
                         grid.attach(&val, 2, row, 1, 1);
                         let (c, pid, min, inst2, val2) = (self.s.clone(), p.id.clone(), p.min, inst.clone(), val.clone());
@@ -423,6 +438,9 @@ impl EffectsPanel {
                 let row = { let r = *row; *row += 1; r };
                 let v = slot.param(p.id);
                 let name = label(p.label, Typography::Label);
+                // one label column for the essentials and the rest
+                name.set_size_request(PARAM_LABEL_W, -1);
+                name.set_xalign(0.0);
                 grid.attach(&name, 0, row, 1, 1);
                 let pid = p.id.to_string();
                 let key = (sid, pid.clone());

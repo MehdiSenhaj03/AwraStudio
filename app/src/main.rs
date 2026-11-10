@@ -78,6 +78,7 @@ fn main() {
                 .unwrap_or((1440, 900));
             let window = awra::Window::offscreen("Awra Studio", w, h, 1.0);
             let ui = ui::Ui::build(&s, window.clone());
+            window.set_default_size(w, h);
             if let Some(l) = arg_value(&args, "--layout") {
                 ui.apply_layout(&s, studio_ai::LayoutCommand::Preset { name: l });
             }
@@ -100,6 +101,19 @@ fn main() {
                 w.set_child(Some(&ui::settings_dialog::appearance_preview(&s)));
                 w
             });
+            if let Some(t) = arg_value(&args, "--dock") {
+                if let Some(n) = awra::DockNode::parse(&t) {
+                    ui.dock.set_layout(n);
+                }
+            }
+            if args.iter().any(|a| a == "--master-chain") {
+                let mut st = s.borrow_mut();
+                st.show_master_chain = true;
+                st.ui_revision += 1;
+            }
+            if let Some(tab) = arg_value(&args, "--open-settings").and_then(|t| t.parse::<u32>().ok()) {
+                ui::settings_dialog::open_tab(&s, &window, tab);
+            }
             if args.iter().any(|a| a == "--edit") {
                 ui.dock.set_editing(true);
             }
@@ -155,6 +169,11 @@ fn main() {
             if let Some(w) = &settings_win {
                 w.render_offscreen(true);
                 w.snapshot_png(&png.replace(".png", "-settings.png"));
+            }
+            // dialogs and other windows opened for the capture
+            for (i, w) in awra::Window::toplevels().iter().filter(|w| **w != window).enumerate() {
+                w.render_offscreen(true);
+                w.snapshot_png(&png.replace(".png", &format!("-win{i}.png")));
             }
             window.render_offscreen(true);
             if !window.snapshot_png(&png) {

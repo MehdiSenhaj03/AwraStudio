@@ -57,6 +57,11 @@ impl Panel for HistoryPanel {
         }
         *self.signature.borrow_mut() = sig;
         self.list.remove_all();
+        if s.doc.history.undo.is_empty() && s.doc.history.redo.is_empty() {
+            let l = label("Rien pour l'instant. Chaque modification (la tienne, celle de l'IA ou d'un participant) apparaît ici et s'annule d'un clic.", Typography::Muted);
+            l.set_wrap(true);
+            self.list.append(&l);
+        }
         for e in s.doc.history.redo.iter() {
             let l = label(&format!("↷ {}", e.forward.label), Typography::Muted);
             self.list.append(&l);

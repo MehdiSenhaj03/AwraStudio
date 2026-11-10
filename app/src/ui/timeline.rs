@@ -78,6 +78,10 @@ struct View {
 pub struct TimelinePanel {
     area: DrawingArea,
     view: Rc<RefCell<View>>,
+    /// Where the playhead was last drawn (a seek while stopped redraws).
+    drawn_pos: std::cell::Cell<f64>,
+    /// Meters still lit after a stop fall back to zero.
+    meters_lit: std::cell::Cell<bool>,
 }
 
 fn color(hex: &str) -> RGBA {
@@ -252,6 +256,8 @@ fn draw(s: &Studio, view: &mut View, c: &awra::Canvas, w: f64, h: f64) {
     let bar = beat * 4.0;
     let px_bar = bar * s.zoom;
     let step_bars = if px_bar < 28.0 { 4.0 } else if px_bar < 56.0 { 2.0 } else { 1.0 };
+    // an empty project keeps a clean page around its welcome
+    let grid_h = if p.tracks.is_empty() && s.pending_imports.is_empty() { 0.0 } else { h - RULER_H };
     let mut b = (s.scroll_x / bar).floor().max(0.0);
     loop {
         let t = b * bar;
@@ -261,15 +267,23 @@ fn draw(s: &Studio, view: &mut View, c: &awra::Canvas, w: f64, h: f64) {
         }
         if x >= HEAD_W {
             let major = (b as i64) % (step_bars as i64) == 0;
-            c.fill_rect(x, RULER_H, 1.0, h - RULER_H, &sep.with_alpha(if major { sep.alpha() } else { sep.alpha() * 0.45 }));
+            c.fill_rect(x, RULER_H, 1.0, grid_h, &sep.with_alpha(if major { sep.alpha() } else { sep.alpha() * 0.45 }));
             if major {
                 c.text(x + 4.0, 3.0, &format!("{}", b as i64 + 1), Typography::Label, &muted);
             }
-            if px_bar > 90.0 {
-                for k in 1..4 {
-                    let bx = x_of(s, t + k as f64 * beat);
-                    c.fill_rect(bx, RULER_H - 6.0, 1.0, 6.0, &sep);
-                    c.fill_rect(bx, RULER_H, 1.0, h - RULER_H, &sep.with_alpha(sep.alpha() * 0.25));
+        }
+        // beats, even in a bar whose start is out of view; numbered
+        // ("3.2") when a bar is wider than the view's text needs
+        if px_bar > 90.0 {
+            for k in 1..4 {
+                let bx = x_of(s, t + k as f64 * beat);
+                if bx < HEAD_W || bx > w {
+                    continue;
+                }
+                c.fill_rect(bx, RULER_H - 6.0, 1.0, 6.0, &sep);
+                c.fill_rect(bx, RULER_H, 1.0, grid_h, &sep.with_alpha(sep.alpha() * 0.25));
+                if px_bar > 260.0 {
+                    c.text(bx + 4.0, 3.0, &format!("{}.{}", b as i64 + 1, k + 1), Typography::Label, &muted.with_alpha(muted.alpha() * 0.6));
                 }
             }
         }
@@ -279,13 +293,20 @@ fn draw(s: &Studio, view: &mut View, c: &awra::Canvas, w: f64, h: f64) {
         c.fill_rect(HEAD_W, 0.0, w - HEAD_W, RULER_H - 1.0, &fg.with_alpha(0.03));
     }
     c.fill_rect(HEAD_W, RULER_H - 1.0, w - HEAD_W, 1.0, &sep);
-    for l in &p.lyrics {
-        if let Some(t) = l.start {
-            let x = x_of(s, t);
-            if x >= HEAD_W && x < w {
-                c.round_rect(x, 21.0, c.text_width(&l.title, Typography::Label) + 10.0, 17.0, 5.0, Some(&accent.with_alpha(0.16)), 0.0, None);
+    // section flags; a label that would run into the next one is cut
+    let mut flags: Vec<(f64, &str)> = p.lyrics.iter().filter_map(|l| l.start.map(|t| (x_of(s, t), l.title.as_str()))).collect();
+    flags.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (i, (x, title)) in flags.iter().enumerate() {
+        let (x, title) = (*x, *title);
+        let next = flags.get(i + 1).map(|f| f.0).unwrap_or(f64::INFINITY);
+        if x >= HEAD_W && x < w {
+            let room = next - x - 4.0;
+            let tw = c.text_width(title, Typography::Label) + 10.0;
+            c.fill_rect(x, 21.0, 1.5, 17.0, &accent);
+            if tw <= room {
+                c.round_rect(x, 21.0, tw, 17.0, 5.0, Some(&accent.with_alpha(0.16)), 0.0, None);
                 c.fill_rect(x, 21.0, 1.5, 17.0, &accent);
-                c.text(x + 5.0, 21.0, &l.title, Typography::Label, &accent);
+                c.text(x + 5.0, 21.0, title, Typography::Label, &accent);
             }
         }
     }
@@ -397,7 +418,8 @@ fn draw(s: &Studio, view: &mut View, c: &awra::Canvas, w: f64, h: f64) {
         }
         let vt = format!("{:+.1} dB", t.volume_db);
         c.text(VOL_X + vw - c.text_width(&vt, Typography::Label), y + 36.0, &vt, Typography::Label, &muted);
-        if let Some(m) = s.engine.shared.meters.try_lock() {
+        let live = s.engine.is_playing() || s.recording.is_some();
+        if let Some(m) = s.engine.shared.meters.try_lock().filter(|_| live) {
             if let Some((_, l, r)) = m.tracks.iter().find(|x| x.0 == t.id) {
                 let lv = l.max(*r) as f64;
                 let p = if lv > 1e-5 { ((20.0 * lv.log10() + 60.0) / 63.0).clamp(0.0, 1.0) } else { 0.0 };
@@ -452,7 +474,8 @@ fn draw(s: &Studio, view: &mut View, c: &awra::Canvas, w: f64, h: f64) {
             } else {
                 shimmer(c, cx0, y + TRACK_H / 2.0 + 6.0, cx1 - cx0, &tc, t_now);
             }
-            if x0 >= HEAD_W - 2.0 && cx1 - cx0 > 60.0 {
+            // the name sticks to the left edge of what is visible
+            if cx1 - cx0 > 60.0 {
                 c.text(cx0 + 8.0, y + 8.0, &clip.name, Typography::Label, &fg);
             }
         }
@@ -721,8 +744,7 @@ fn menu(area: &DrawingArea, x: f64, y: f64, items: Vec<(String, Box<dyn Fn()>)>)
             col.append(&awra::Separator::new(awra::Orientation::Horizontal));
             continue;
         }
-        let b = awra::Button::with_label(&text);
-        b.set_appearance(awra::ButtonAppearance::Ghost);
+        let b = super::menu_item(&text, None);
         let p = pop.clone();
         b.connect_clicked(move |_| {
             p.popdown();
@@ -865,7 +887,11 @@ impl TimelinePanel {
                 };
                 match action {
                     Action::TrackMenu(id) => track_menu(&s, &ar, id, args.x(), args.y()),
-                    Action::AddMenu => add_menu(&s, &ar, args.x(), args.y()),
+                    Action::AddMenu => {
+                        // under the pill, not over it
+                        let y = add_row_y(&s.borrow()) + 12.0 + PILL_H + 2.0;
+                        add_menu(&s, &ar, PILL_X + PILL_W / 2.0, y)
+                    }
                     Action::None => {}
                 }
                 ar.queue_draw();
@@ -919,13 +945,17 @@ impl TimelinePanel {
                 if ctrl {
                     // zoom around the pointer, eased
                     let cur = vw.zoom_target.map(|z| z.0).unwrap_or(st.zoom);
-                    let z = (cur * if dy < 0.0 { 1.25 } else { 1.0 / 1.25 }).clamp(4.0, 800.0);
+                    // out to the whole song (a little more), in to a beat
+                    let song = st.doc.project.duration().max(20.0) * 1.25;
+                    let min = ((vw.width - HEAD_W) / song).clamp(2.0, 40.0);
+                    let z = (cur * if dy < 0.0 { 1.25 } else { 1.0 / 1.25 }).clamp(min, 800.0);
                     let anchor_x = px.max(HEAD_W);
                     vw.zoom_target = Some((z, t_of(&st, anchor_x), anchor_x));
                 } else if shift || dx.abs() > dy.abs() {
                     let d = if dx.abs() > 0.0 { dx } else { dy };
                     let cur = vw.scroll_target.unwrap_or(st.scroll_x);
-                    vw.scroll_target = Some((cur + d * 60.0 / st.zoom).max(0.0));
+                    let end = st.doc.project.duration().max(10.0);
+                    vw.scroll_target = Some((cur + d * 60.0 / st.zoom).clamp(0.0, end));
                 } else {
                     let rows = st.doc.project.tracks.len() + pending_new(&st);
                     let max = ((rows as f64 + 1.0) * TRACK_H - vw.height + RULER_H + ADD_H).max(0.0);
@@ -957,7 +987,7 @@ impl TimelinePanel {
                 ar.queue_draw();
             });
         }
-        Rc::new(TimelinePanel { area, view })
+        Rc::new(TimelinePanel { area, view, drawn_pos: std::cell::Cell::new(0.0), meters_lit: std::cell::Cell::new(false) })
     }
 
     /// Eased zoom and scrolling, following the playhead. True while
@@ -978,7 +1008,7 @@ impl TimelinePanel {
                 s.zoom = z;
                 v.zoom_target = None;
             }
-            s.scroll_x = (at - (ax - HEAD_W) / s.zoom).max(0.0);
+            s.scroll_x = (at - (ax - HEAD_W) / s.zoom).clamp(0.0, s.doc.project.duration().max(10.0));
             v.scroll_target = None;
             moving = true;
         }
@@ -1025,8 +1055,14 @@ impl Panel for TimelinePanel {
         let t = now();
         let fading = s.assets.loaded_at.values().any(|t0| t - t0 < 400.0);
         let v = self.view.borrow();
-        if s.engine.is_playing()
-            || s.recording.is_some()
+        let pos = s.engine.position();
+        let moved = (pos - self.drawn_pos.get()).abs() > 1e-4;
+        self.drawn_pos.set(pos);
+        let live = s.engine.is_playing() || s.recording.is_some();
+        let unlit = self.meters_lit.replace(live) && !live;
+        if live
+            || moved
+            || unlit
             || v.drag.is_some()
             || v.drop.is_some()
             || !s.pending_imports.is_empty()

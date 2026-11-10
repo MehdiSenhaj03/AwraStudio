@@ -106,6 +106,19 @@ impl Peaks {
             return (0.0, 0.0);
         }
         let frames = (t1 - t0) * self.sample_rate as f64;
+        if frames < 64.0 {
+            // closer than one block: between the two nearest blocks, so a
+            // zoomed-in waveform has no steps at block edges
+            let data = &self.levels[0];
+            let c = ((t0 + t1) * 0.5 * self.sample_rate as f64 / 64.0 - 0.5).max(0.0);
+            let i = c.floor() as usize;
+            if i >= data.len() {
+                return (0.0, 0.0);
+            }
+            let f = (c - i as f64) as f32;
+            let (a, b) = (data[i], data[(i + 1).min(data.len() - 1)]);
+            return (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f);
+        }
         // the coarsest level with at least one block per range
         let mut lvl = 0;
         while lvl + 1 < self.levels.len() && (64u64 << (lvl + 1)) as f64 <= frames {
@@ -182,5 +195,18 @@ mod tests {
         let p = Peaks::of(&b);
         assert_eq!(p.range(0.0, 1.0).1, 0.9);
         assert_eq!(p.range(0.0, 0.4).1, 0.0);
+    }
+
+    #[test]
+    fn zoomed_in_peaks_have_no_steps() {
+        // a steady tone: every pixel column, however narrow, as tall as
+        // its neighbours (no notches at block edges)
+        let sr = 48000;
+        let x: Vec<f32> = (0..sr).map(|i| (i as f32 * 0.3).sin() * 0.5).collect();
+        let p = Peaks::of(&AudioBuffer::from_mono(sr as u32, x));
+        let px = 1.0 / 2000.0; // 24 samples a column
+        let cols: Vec<f32> = (0..400).map(|i| p.range(0.2 + i as f64 * px, 0.2 + (i + 1) as f64 * px).1).collect();
+        let (lo, hi) = cols.iter().fold((f32::MAX, 0.0f32), |(a, b), &v| (a.min(v), b.max(v)));
+        assert!(hi - lo < 0.02, "{lo}..{hi}");
     }
 }

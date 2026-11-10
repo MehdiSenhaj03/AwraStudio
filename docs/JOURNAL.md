@@ -70,6 +70,47 @@ ARCHITECTURE.md pour la conception). Pistes pour la suite :
 
 ## Journal
 
+- Audit visuel complet (demande : « plus aucun bug visuel, artefact,
+  élément mal placé »). Outils : le mode capture (`--screenshot`, avec
+  maintenant `--size WxH` réellement appliqué, `--dock "<disposition>"`,
+  `--master-chain`, `--open-settings N`) et, pour les menus, popovers et
+  dialogues, l'application réelle sous Xvfb pilotée par XTEST
+  (python-xlib) avec des captures `import -window root`. Sous Xvfb sans
+  compositeur, les coins des popups sont noirs : ce n'est pas un bug de
+  l'appli. Corrigé :
+  - Timeline : vumètres de piste restés allumés après l'arrêt ; tête de
+    lecture non redessinée après un déplacement à l'arrêt (Début, etc.) ;
+    un enregistrement sans micro créait une piste et reculait la tête ;
+    dézoom illimité (le morceau devenait minuscule, repères de paroles
+    superposés) → zoom borné au morceau, étiquettes de sections qui ne se
+    chevauchent plus ; zoom maximal sans aucun repère → temps « 3.2 » ;
+    fines rayures dans les formes d'onde zoomées (`Peaks::range`
+    interpole sous un bloc, test ajouté) ; nom du clip qui reste visible ;
+    grille masquée derrière l'accueil d'un projet vide ; menu « Ajouter
+    une piste » ouvert sous la pilule et plus dessus.
+  - Menus : entrées alignées à gauche avec raccourcis (Ctrl+N/O/S/I/,
+    ajoutés), menu Interface en sections (Disposition, Panneaux) avec une
+    vraie colonne de coches.
+  - Mixage : faders du master alignés sur ceux des pistes ; panoramiques
+    remplis depuis le centre (nouvelle API Awra `Slider::set_origin`) ;
+    vumètre master légendé « Sortie » (il ressemblait à un séparateur).
+  - Effets : tout le panneau défile quand il est petit (après « agrandis
+    la timeline » il était coupé) ; « Pan » masqué sur le master ; colonne
+    de libellés commune aux réglages essentiels et avancés.
+  - Assistant : suggestions sur deux colonnes même en panneau étroit
+    (libellés raccourcis) ; progression étape par étape de l'ingénieur
+    local ; défilement qui suit le message jusqu'au bout de son animation ;
+    messages sans identifiants internes (« lyrics », « right », « clean »).
+  - Réglages : dialogue assez haut pour voir toutes les opacités ; onglet
+    IA qui masque les champs inutiles au lieu de les griser ; colonne de
+    libellés identique sur les trois onglets ; le bouton ⚙ de l'assistant
+    ouvre directement l'onglet IA.
+  - Divers : historique vide expliqué, filtre de plugins avec texte
+    d'aide, titre du panneau Fichiers, code d'invitation sur une tuile,
+    « Quitter la session » moins envahissant.
+  - Awra : `awra_slider_set_origin`, Dock qui laisse au moins 20 % au
+    voisin d'un panneau agrandi.
+
 - Passe UI/UX (demande : bouton « + Audio » qui débordait, fond opaque,
   transparence réglable par élément, micro-animations, glisser-déposer) :
   - Timeline réécrite (`ui/timeline.rs`) : une pilule « + Ajouter une

@@ -123,6 +123,9 @@ L'exécutable ne dépend que de DLL du système.
 | double-clic / clic droit sur une piste | renommer, type, couleur, supprimer |
 | `Ctrl+E` | personnaliser l'interface |
 | `Ctrl+S` | enregistrer le projet |
+| `Ctrl+N` / `Ctrl+O` | nouveau projet / ouvrir un projet |
+| `Ctrl+I` | importer de l'audio |
+| `Ctrl+,` | réglages |
 
 ## Le projet sur disque
 

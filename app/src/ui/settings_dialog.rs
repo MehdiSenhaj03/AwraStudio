@@ -12,12 +12,16 @@ use studio_ai::ProviderKind;
 use super::appearance::{self, Appearance, ACCENTS, PARTS};
 use super::{label, S};
 
-fn row(grid: &awra::Grid, r: i32, title: &str, w: &impl IsWidget) {
+fn row(grid: &awra::Grid, r: i32, title: &str, w: &impl IsWidget) -> awra::Label {
     let l = label(title, Typography::Label);
     l.set_valign(awra::Align::Center);
+    l.set_xalign(0.0);
+    // the same label column on every tab
+    l.set_size_request(230, -1);
     grid.attach(&l, 0, r, 1, 1);
     w.as_ref().set_hexpand(true);
     grid.attach(w, 1, r, 1, 1);
+    l
 }
 
 fn grid() -> awra::Grid {
@@ -172,6 +176,11 @@ fn appearance_tab(draft: &Rc<RefCell<Appearance>>) -> awra::Box {
 }
 
 pub fn open(s: &S, window: &awra::Window) {
+    open_tab(s, window, 0);
+}
+
+/// Opens the settings on a tab (0 appearance, 1 AI, 2 audio & session).
+pub fn open_tab(s: &S, window: &awra::Window, tab: u32) {
     let st = s.borrow();
     let cfg = st.settings.ai.clone();
     let before = st.settings.appearance.clone();
@@ -193,7 +202,11 @@ pub fn open(s: &S, window: &awra::Window) {
     root.append(&stack);
 
     // Appearance
-    stack.add_named(&super::scrolled(&appearance_tab(&draft)), Some("look"));
+    // tall enough to see every part at once; scrolls on small screens
+    let look = super::scrolled(&appearance_tab(&draft));
+    look.set_propagate_natural_height(true);
+    look.set_max_content_height(560);
+    stack.add_named(&look, Some("look"));
 
     // AI
     let ai = awra::Box::new(Orientation::Vertical, 12);
@@ -212,20 +225,20 @@ pub fn open(s: &S, window: &awra::Window) {
     row(&g, 0, "Modèle", &provider);
     let model = awra::Entry::new();
     model.set_text(&cfg.model);
-    row(&g, 1, "Nom du modèle", &model);
+    let model_l = row(&g, 1, "Nom du modèle", &model);
     let key = awra::PasswordEntry::new();
     key.set_text(&cfg.api_key);
-    row(&g, 2, "Clé API", &key);
+    let key_l = row(&g, 2, "Clé API", &key);
     let url = awra::Entry::new();
     url.set_text(&cfg.base_url);
     url.set_placeholder_text(Some("par défaut"));
-    row(&g, 3, "Adresse du serveur", &url);
+    let url_l = row(&g, 3, "Adresse du serveur", &url);
     let cmd = awra::Entry::new();
     cmd.set_text(&cfg.command);
-    cmd.set_placeholder_text(Some("par défaut : codex exec … / claude -p …"));
-    row(&g, 4, "Commande (CLI)", &cmd);
+    let cmd_l = row(&g, 4, "Commande (CLI)", &cmd);
     let login = awra::Button::with_label("Se connecter…");
-    row(&g, 5, "Connexion", &login);
+    login.set_appearance(awra::ButtonAppearance::Secondary);
+    let login_l = row(&g, 5, "Connexion", &login);
     let proactive = awra::Switch::new();
     proactive.set_active(cfg.proactive);
     proactive.set_halign(awra::Align::Start);
@@ -266,16 +279,27 @@ pub fn open(s: &S, window: &awra::Window) {
 
     let st2 = stack.clone();
     tabs.connect_changed(move |_, i| st2.set_visible_child_name(["look", "ai", "audio"][i as usize % 3]));
+    if tab > 0 {
+        tabs.set_selected(tab.min(2));
+        stack.set_visible_child_name(["look", "ai", "audio"][tab.min(2) as usize]);
+    }
 
     let update_sensitivity = {
         let (key, url, cmd, login, model) = (key.clone(), url.clone(), cmd.clone(), login.clone(), model.clone());
+        let labels = (key_l, url_l, cmd_l, login_l, model_l);
+        // only what the chosen model needs is shown
         move |k: ProviderKind| {
-            key.set_sensitive(k.needs_key() || k == ProviderKind::OpenAiCompatible);
-            url.set_sensitive(matches!(k, ProviderKind::OpenAi | ProviderKind::Anthropic | ProviderKind::OpenAiCompatible));
-            cmd.set_sensitive(matches!(k, ProviderKind::CodexCli | ProviderKind::ClaudeCli));
-            login.set_sensitive(k.login_command().is_some());
-            model.set_sensitive(!matches!(k, ProviderKind::Local | ProviderKind::CodexCli | ProviderKind::ClaudeCli));
-            model.set_placeholder_text(Some(if k.default_model().is_empty() { "—" } else { k.default_model() }));
+            let show = |w: &awra::Widget, l: &awra::Label, on: bool| {
+                w.set_visible(on);
+                l.set_visible(on);
+            };
+            show(key.as_ref(), &labels.0, k.needs_key() || k == ProviderKind::OpenAiCompatible);
+            show(url.as_ref(), &labels.1, matches!(k, ProviderKind::OpenAi | ProviderKind::Anthropic | ProviderKind::OpenAiCompatible));
+            show(cmd.as_ref(), &labels.2, matches!(k, ProviderKind::CodexCli | ProviderKind::ClaudeCli));
+            cmd.set_placeholder_text(Some(if k == ProviderKind::ClaudeCli { "par défaut : claude -p …" } else { "par défaut : codex exec …" }));
+            show(login.as_ref(), &labels.3, k.login_command().is_some());
+            show(model.as_ref(), &labels.4, !matches!(k, ProviderKind::Local | ProviderKind::CodexCli | ProviderKind::ClaudeCli));
+            model.set_placeholder_text(Some(k.default_model()));
         }
     };
     update_sensitivity(cfg.kind);
@@ -337,5 +361,5 @@ pub fn appearance_preview(s: &S) -> awra::Box {
 
 /// Opens the settings on the Appearance tab (from the interface menu).
 pub fn open_appearance(s: &S, window: &awra::Window) {
-    open(s, window);
+    open_tab(s, window, 0);
 }

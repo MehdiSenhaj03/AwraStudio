@@ -23,12 +23,12 @@ pub struct AssistantPanel {
 }
 
 const SUGGESTIONS: [(&str, &str); 6] = [
-    ("Voix plus propre", "Rends ma voix plus propre"),
-    ("Autotune calé", "Mets-moi un autotune bien calibré"),
-    ("Voix étouffée ?", "Ma voix est trop étouffée, corrige ça"),
+    ("Voix propre", "Rends ma voix plus propre"),
+    ("Autotune", "Mets-moi un autotune bien calibré"),
+    ("Voix étouffée", "Ma voix est trop étouffée, corrige ça"),
     ("Mixer les voix", "Mixe nos voix pour qu'elles se complètent bien"),
     ("Variantes A/B", "Propose plusieurs variantes de mix"),
-    ("Finaliser le son", "Finalise le son"),
+    ("Finaliser", "Finalise le son"),
 ];
 
 impl AssistantPanel {
@@ -62,10 +62,17 @@ impl AssistantPanel {
 
         let chips = awra::FlowBox::new();
         chips.set_selection_mode(awra::SelectionMode::None);
-        chips.set_min_children_per_line(1);
+        chips.set_min_children_per_line(2);
         chips.set_max_children_per_line(3);
+        chips.set_homogeneous(true);
+        chips.set_row_spacing(0);
+        chips.set_column_spacing(6);
         for (short, sgt) in SUGGESTIONS {
-            let b = awra::Button::with_label(short);
+            // two per line even in a narrow panel: the label shortens
+            let b = awra::Button::new();
+            let l = awra::Label::new(Some(short));
+            l.set_ellipsize(awra::pango::EllipsizeMode::End);
+            b.set_child(Some(&l));
             b.set_appearance(ButtonAppearance::Secondary);
             b.set_tooltip_text(Some(sgt));
             let c = s.clone();
@@ -113,7 +120,7 @@ impl AssistantPanel {
         send.connect_clicked(move |_| go());
         let c = s.clone();
         let w = window.clone();
-        settings.connect_clicked(move |_| super::settings_dialog::open(&c, &w));
+        settings.connect_clicked(move |_| super::settings_dialog::open_tab(&c, &w, 1));
         panel
     }
 

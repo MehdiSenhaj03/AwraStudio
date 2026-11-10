@@ -572,6 +572,11 @@ impl Studio {
             self.stop_recording();
             return;
         }
+        // nothing to record from: say so before touching the project
+        if self.engine.input_name.is_none() {
+            self.toasts.push("Enregistrement impossible : aucun micro détecté".into());
+            return;
+        }
         let track = match self.selected.filter(|t| self.doc.project.track(*t).is_some_and(|t| t.kind != TrackKind::Instrumental)) {
             Some(t) => t,
             None => self.new_track(TrackKind::Vocal),

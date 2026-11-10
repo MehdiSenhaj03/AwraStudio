@@ -60,14 +60,24 @@ impl MixerPanel {
         name.set_ellipsize(awra::pango::EllipsizeMode::End);
         name.set_xalign(0.5);
         col.append(&name);
-        let pan = track.map(|t| {
-            let p = awra::Slider::with_range(Orientation::Horizontal, -1.0, 1.0, 0.01);
-            p.set_draw_value(false);
-            p.set_value(t.pan);
-            p.set_tooltip_text(Some("Panoramique"));
-            col.append(&p);
-            p
-        });
+        // the master has no pan nor mute/solo: same-sized blanks keep
+        // every fader on the same line
+        let pan_slider = awra::Slider::with_range(Orientation::Horizontal, -1.0, 1.0, 0.01);
+        pan_slider.set_draw_value(false);
+        pan_slider.set_origin(0.0);
+        col.append(&pan_slider);
+        let pan = match track {
+            Some(t) => {
+                pan_slider.set_value(t.pan);
+                pan_slider.set_tooltip_text(Some("Panoramique"));
+                Some(pan_slider)
+            }
+            None => {
+                pan_slider.set_opacity(0.0);
+                pan_slider.set_sensitive(false);
+                None
+            }
+        };
         let row = awra::Box::new(Orientation::Horizontal, 4);
         row.set_vexpand(true);
         row.set_halign(awra::Align::Center);
@@ -111,6 +121,14 @@ impl MixerPanel {
             });
             mute = Some(m);
             solo = Some(s);
+        } else {
+            let ms = awra::Box::new(Orientation::Horizontal, 4);
+            ms.set_halign(awra::Align::Center);
+            let blank = awra::ToggleButton::with_label("M");
+            blank.set_opacity(0.0);
+            blank.set_sensitive(false);
+            ms.append(&blank);
+            col.append(&ms);
         }
         let id = track.map(|t| t.id);
         let (c, v2) = (self.s.clone(), value.clone());
@@ -187,7 +205,11 @@ impl Panel for MixerPanel {
     }
 
     fn tick(&self, s: &Studio) {
-        let Some(m) = s.engine.shared.meters.try_lock().map(|m| m.clone()) else { return };
+        let Some(mut m) = s.engine.shared.meters.try_lock().map(|m| m.clone()) else { return };
+        if !(s.engine.is_playing() || s.recording.is_some()) {
+            // stopped: the meters fall back
+            m = Default::default();
+        }
         for st in self.strips.borrow().iter() {
             match st.id {
                 Some(id) => {

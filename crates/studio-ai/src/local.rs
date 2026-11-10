@@ -126,6 +126,8 @@ pub fn plan(p: &Project, request: &str, selected: Option<Id>) -> Vec<Step> {
             // clause by clause: "mets les paroles à droite et agrandis la timeline"
             for clause in t.split([',', ';', '.']).flat_map(|c| c.split(" et ")) {
                 for panel in panels_in(clause) {
+                    // the panel's name as the interface shows it
+                    let name = crate::host::PANELS.iter().find(|p| p.0 == panel).map(|p| p.1).unwrap_or(panel);
                     let area = if has(clause, &["a droite"]) {
                         Some("right")
                     } else if has(clause, &["a gauche"]) {
@@ -138,15 +140,20 @@ pub fn plan(p: &Project, request: &str, selected: Option<Id>) -> Vec<Step> {
                         None
                     };
                     if let Some(area) = area {
-                        steps.push(step("set_layout", json!({"action": "move", "panel": panel, "area": area}), format!("Panneau « {panel} » déplacé ({area}).")));
+                        steps.push(step("set_layout", json!({"action": "move", "panel": panel, "area": area}), format!("« {name} » passe {}.", match area {
+                            "right" => "à droite",
+                            "left" => "à gauche",
+                            "bottom" => "en bas",
+                            _ => "au centre",
+                        })));
                     } else if has(clause, &["agrandi", "plus grand", "plus de place", "elargi"]) {
-                        steps.push(step("set_layout", json!({"action": "resize", "panel": panel, "factor": 1.4}), format!("J'agrandis « {panel} ».")));
+                        steps.push(step("set_layout", json!({"action": "resize", "panel": panel, "factor": 1.4}), format!("J'agrandis « {name} ».")));
                     } else if has(clause, &["reduis", "plus petit", "rapetiss"]) {
-                        steps.push(step("set_layout", json!({"action": "resize", "panel": panel, "factor": 0.7}), format!("Je réduis « {panel} ».")));
+                        steps.push(step("set_layout", json!({"action": "resize", "panel": panel, "factor": 0.7}), format!("Je réduis « {name} ».")));
                     } else if has(clause, &["cache", "masque", "enleve", "ferme", "retire"]) {
-                        steps.push(step("set_layout", json!({"action": "hide", "panel": panel}), format!("Panneau « {panel} » masqué.")));
+                        steps.push(step("set_layout", json!({"action": "hide", "panel": panel}), format!("« {name} » est masqué.")));
                     } else if has(clause, &["affiche", "montre", "ouvre", "ajoute"]) {
-                        steps.push(step("set_layout", json!({"action": "show", "panel": panel}), format!("Panneau « {panel} » affiché.")));
+                        steps.push(step("set_layout", json!({"action": "show", "panel": panel}), format!("« {name} » est affiché.")));
                     }
                 }
             }
@@ -234,7 +241,14 @@ pub fn plan(p: &Project, request: &str, selected: Option<Id>) -> Vec<Step> {
         let ids = id.to_string();
         if has(&t, &["propre", "nettoi", "nettoy", "clean", "pro "]) || style_word.is_some() {
             let style = style_word.unwrap_or(if has(&t, &["autotune"]) { "autotune" } else { "clean" });
-            steps.push(step("build_vocal_chain", json!({"track": ids, "style": style}), format!("J'écoute « {name} » et je construis une chaîne adaptée ({style}).")));
+            steps.push(step("build_vocal_chain", json!({"track": ids, "style": style}), format!("J'écoute « {name} » et je construis une chaîne adaptée, rendu {}.", match style {
+                "natural" => "naturel",
+                "autotune" => "autotune",
+                "melodic" => "mélodique",
+                "aggressive" => "agressif",
+                "ambient" => "aérien",
+                _ => "propre",
+            })));
             continue;
         }
         if has(&t, &["autotune", "auto-tune", "auto tune", "justesse", "faux", "chante juste"]) {
@@ -324,6 +338,11 @@ pub fn plan(p: &Project, request: &str, selected: Option<Id>) -> Vec<Step> {
 
 /// Runs a plan and writes the reply.
 pub fn run(host: &mut dyn StudioHost, request: &str, selected: Option<Id>) -> (String, Vec<(Id, String)>) {
+    run_with_progress(host, request, selected, &mut |_| {})
+}
+
+/// Same, saying what it is doing step by step.
+pub fn run_with_progress(host: &mut dyn StudioHost, request: &str, selected: Option<Id>, progress: &mut dyn FnMut(&str)) -> (String, Vec<(Id, String)>) {
     let p = host.project();
     let steps = plan(&p, request, selected);
     if steps.is_empty() {
@@ -332,6 +351,7 @@ pub fn run(host: &mut dyn StudioHost, request: &str, selected: Option<Id>) -> (S
     let mut lines = Vec::new();
     let mut committed = Vec::new();
     for st in steps {
+        progress(&crate::agent::tool_progress(st.tool));
         let o: ToolOutcome = tools::execute(st.tool, &st.args, host);
         if o.error {
             lines.push(o.output);

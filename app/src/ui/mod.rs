@@ -74,7 +74,7 @@ pub fn appear(child: &impl IsWidget, kind: awra::RevealerTransitionType) -> awra
 /// Scrolls to the end smoothly.
 pub fn scroll_to_end(sw: &awra::ScrolledWindow) {
     let sw = sw.clone();
-    let mut steps = 0;
+    let (mut steps, mut settled) = (0, 0);
     awra::glib::timeout_add_local(Duration::from_millis(16), move || {
         let adj = sw.vadjustment();
         let (v, upper, page) = (adj.value(), adj.upper(), adj.page_size());
@@ -82,7 +82,9 @@ pub fn scroll_to_end(sw: &awra::ScrolledWindow) {
         let next = v + (target - v) * 0.3;
         sw.set_vvalue(if (target - next).abs() < 1.0 { target } else { next });
         steps += 1;
-        if (target - next).abs() < 1.0 || steps > 40 {
+        // keep following while what was added unfolds (its height grows)
+        settled = if (target - next).abs() < 1.0 { settled + 1 } else { 0 };
+        if settled > 20 || steps > 120 {
             awra::glib::ControlFlow::Break
         } else {
             awra::glib::ControlFlow::Continue
@@ -126,6 +128,43 @@ pub fn section(title: &str) -> awra::Box {
     b
 }
 
+/// A menu entry: its label on the left, its shortcut (muted) on the right.
+pub fn menu_item(text: &str, shortcut: Option<&str>) -> awra::Button {
+    let b = awra::Button::new();
+    b.set_appearance(awra::ButtonAppearance::Ghost);
+    b.set_halign(awra::Align::Fill);
+    let row = awra::Box::new(Orientation::Horizontal, 24);
+    let l = awra::Label::new(Some(text));
+    l.set_xalign(0.0);
+    l.set_hexpand(true);
+    row.append(&l);
+    if let Some(k) = shortcut {
+        let k = label(k, awra::Typography::Muted);
+        k.set_xalign(1.0);
+        row.append(&k);
+    }
+    b.set_child(Some(&row));
+    b
+}
+
+/// A menu entry with a tick column (panels shown or hidden).
+pub fn menu_check_item(text: &str, on: bool) -> awra::Button {
+    let b = awra::Button::new();
+    b.set_appearance(awra::ButtonAppearance::Ghost);
+    b.set_halign(awra::Align::Fill);
+    let row = awra::Box::new(Orientation::Horizontal, 8);
+    let tick = awra::Image::from_icon_name("object-select-symbolic");
+    tick.set_size_request(16, 16);
+    tick.set_opacity(if on { 1.0 } else { 0.0 });
+    row.append(&tick);
+    let l = awra::Label::new(Some(text));
+    l.set_xalign(0.0);
+    l.set_hexpand(true);
+    row.append(&l);
+    b.set_child(Some(&row));
+    b
+}
+
 pub fn scrolled(child: &impl IsWidget) -> awra::ScrolledWindow {
     let sw = awra::ScrolledWindow::new();
     sw.set_policy(awra::PolicyType::Never, awra::PolicyType::Automatic);
@@ -152,6 +191,11 @@ pub const PRESETS: [(&str, &str, &str); 6] = [
     ("minimal", "Minimal", "h(0.760,v(0.700,timeline,effects),assistant)"),
     ("session", "À plusieurs", "h(0.720,v(0.640,timeline,effects),t(0,session,lyrics,assistant))"),
 ];
+
+pub fn new_project(s: &S) {
+    let doc = studio_core::Document::new(studio_core::Project::new("Sans titre"));
+    s.borrow_mut().set_document(doc);
+}
 
 pub fn preset(name: &str) -> Option<DockNode> {
     let n = name.to_lowercase();
@@ -286,6 +330,16 @@ impl Ui {
         let ui = self.clone();
         let s2 = s.clone();
         w.add_shortcut("<Ctrl>s", move |_| ui.header.save(&s2, false));
+        let ui = self.clone();
+        let s2 = s.clone();
+        w.add_shortcut("<Ctrl>o", move |_| ui.header.open(&s2));
+        let ui = self.clone();
+        let s2 = s.clone();
+        w.add_shortcut("<Ctrl>i", move |_| ui.header.import(&s2));
+        let ui = self.clone();
+        let s2 = s.clone();
+        w.add_shortcut("<Ctrl>comma", move |_| settings_dialog::open(&s2, &ui.window));
+        add("<Ctrl>n", Box::new(|s| new_project(s)));
         let ui = self.clone();
         let s2 = s.clone();
         w.add_shortcut("<Ctrl>e", move |_| {

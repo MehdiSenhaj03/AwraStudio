@@ -99,7 +99,14 @@ impl SessionPanel {
             l.set_selectable(true);
             l.set_wrap(true);
             l.set_wrap_mode(awra::WrapMode::Char);
-            inv.append(&l);
+            l.set_xalign(0.0);
+            // the code on its own tile, easy to spot and select
+            let tile = awra::Card::new();
+            let pad = awra::Box::new(Orientation::Vertical, 0);
+            pad.set_margins(4, 6, 4, 6);
+            pad.append(&l);
+            tile.set_child(Some(&pad));
+            inv.append(&tile);
             let copy = button("Copier le code", Some("edit-copy-symbolic"), ButtonAppearance::Secondary);
             let code = code.clone();
             let c = self.s.clone();
@@ -166,6 +173,8 @@ impl SessionPanel {
         self.content.append(&chat);
         *self.chat_box.borrow_mut() = Some(msgs);
         let leave = button("Quitter la session", Some("window-close-symbolic"), ButtonAppearance::Destructive);
+        leave.set_halign(awra::Align::Start);
+        leave.set_margin_top(10);
         let c = self.s.clone();
         leave.connect_clicked(move |_| c.borrow_mut().leave_session());
         self.content.append(&leave);
