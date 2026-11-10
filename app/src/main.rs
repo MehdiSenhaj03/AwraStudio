@@ -86,6 +86,9 @@ fn main() {
                 st.selected = st.doc.project.tracks.get(n).map(|t| t.id);
                 st.ui_revision += 1;
             }
+            if args.iter().any(|a| a == "--edit") {
+                ui.dock.set_editing(true);
+            }
             if let Some(q) = arg_value(&args, "--ask") {
                 s.borrow_mut().ask_ai(&q);
             }
@@ -108,6 +111,22 @@ fn main() {
             for _ in 0..10 {
                 awra::pump();
                 std::thread::sleep(Duration::from_millis(20));
+            }
+            if std::env::var("AWRA_STUDIO_DEBUG").is_ok() {
+                eprintln!("layout: {}", ui.dock.layout().map(|l| l.to_text()).unwrap_or_default());
+                window.render_offscreen(true);
+                for (id, _) in ui.dock.panel_ids() {
+                    if let Some(w) = ui.dock.panel_widget(&id) {
+                        let mut p = w.parent();
+                        let mut chain = Vec::new();
+                        while let Some(x) = p {
+                            let (mn, nt, _, _) = x.measure(awra::Orientation::Horizontal, -1);
+                            chain.push(format!("{}:{}[{mn},{nt}]", x.widget_name(), x.width()));
+                            p = x.parent();
+                        }
+                        eprintln!("{id}: w={} h={} mapped={} parents={}", w.width(), w.height(), w.is_mapped(), chain.join(" < "));
+                    }
+                }
             }
             window.render_offscreen(true);
             if !window.snapshot_png(&png) {

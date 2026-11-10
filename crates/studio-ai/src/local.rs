@@ -375,7 +375,7 @@ pub fn run(host: &mut dyn StudioHost, request: &str, selected: Option<Id>) -> (S
                     lines.push(format!("Niveau final visé : {t:.0} LUFS (normes des plateformes de streaming)."));
                 }
             }
-        } else if !o.output.is_empty() && o.output != "ok" {
+        } else if !o.output.is_empty() && o.output != "ok" && st.tool != "set_layout" {
             lines.push(o.output.clone());
         }
         committed.extend(o.committed);

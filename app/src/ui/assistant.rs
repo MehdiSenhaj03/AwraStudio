@@ -62,9 +62,8 @@ impl AssistantPanel {
 
         let chips = awra::FlowBox::new();
         chips.set_selection_mode(awra::SelectionMode::None);
-        chips.set_min_children_per_line(3);
+        chips.set_min_children_per_line(1);
         chips.set_max_children_per_line(3);
-        chips.set_homogeneous(true);
         for (short, sgt) in SUGGESTIONS {
             let b = awra::Button::with_label(short);
             b.set_appearance(ButtonAppearance::Secondary);
