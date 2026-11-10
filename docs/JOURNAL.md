@@ -62,6 +62,17 @@ le travail après une perte de contexte).
 
 ## Journal
 
+- `studio-plugins` terminé : CLAP via `clap-sys` 0.5 (scan, instance,
+  params, état, timers hôte, fenêtre flottante x11/win32), VST3 via le
+  crate `vst3` 0.3 (bindings générés du SDK : composant, contrôleur
+  séparé + IConnectionPoint, IBStream mémoire, IParameterChanges maison,
+  état ; pas d'éditeur VST3 intégré — paramètres affichés par le studio).
+  `PluginManager::create(slot, sr, block)` sert de fabrique au MixGraph ;
+  scan hors-processus via `awra-studio --scan-plugin <fichier>` (JSON).
+  Test d'intégration avec un vrai plugin CLAP (`test-plugins/awra-test-gain`).
+  Clés des paramètres plugin dans `EffectSlot.params` = id numérique en
+  texte (CLAP : valeur réelle ; VST3 : normalisée 0..1).
+
 - `studio-collab` terminé (5 tests : loopback hôte/invité, mauvais code
   refusé, convergence de modifs concurrentes). API : `Session::host(name,
   port, upnp)` → `invite` (code `AWRA-<adresses base32>-<secret 16 car.>`),

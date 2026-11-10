@@ -1,7 +1,19 @@
 [package]
 name = "studio-plugins"
+description = "Awra Studio: VST3 and CLAP plugin hosting (scan, load, process, parameters, state)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+studio-core.workspace = true
+studio-dsp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+parking_lot.workspace = true
+clap-sys = "0.5"
+vst3 = "0.3"
+libloading = "0.8"
+base64 = "0.22"
+dirs = "5"

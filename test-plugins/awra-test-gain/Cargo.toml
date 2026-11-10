@@ -1,0 +1,13 @@
+[package]
+name = "awra-test-gain"
+description = "A minimal CLAP gain plugin used to test Awra Studio's plugin host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+clap-sys = "0.5"

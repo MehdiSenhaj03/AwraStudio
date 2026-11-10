@@ -9,6 +9,7 @@ members = [
     "crates/studio-collab",
     "crates/studio-plugins",
     "app",
+    "test-plugins/awra-test-gain",
 ]
 
 [workspace.package]
