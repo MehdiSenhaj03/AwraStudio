@@ -73,9 +73,9 @@ ARCHITECTURE.md pour la conception). Pistes pour la suite :
 - Le studio a désormais son propre dépôt (`MehdiSenhajYnov/AwraStudio`,
   branche `main`), extrait avec son historique (`git subtree split`) du
   dossier `studio/` de la branche `claude/awra-studio-project-78gw3w`
-  d'Awra. Awra est maintenant une dépendance git épinglée (rev
-  `cbc4fe5`, qui contient Dock / LevelMeter / texte de canvas et le
-  correctif child-visible). Pour faire évoluer le framework : modifier Awra,
+  d'Awra (le dossier y a ensuite été supprimé). Awra est une dépendance
+  git épinglée sur `main` (rev `68a0eb9`, qui contient Dock / LevelMeter /
+  texte de canvas et le correctif child-visible). Pour faire évoluer le framework : modifier Awra,
   pousser, puis mettre à jour `rev` dans `Cargo.toml` (`cargo update -p awra`).
   Les chemins `studio/…` plus bas datent d'avant l'extraction.
 

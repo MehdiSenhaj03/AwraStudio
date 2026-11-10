@@ -27,7 +27,7 @@ studio-ai = { path = "crates/studio-ai" }
 studio-collab = { path = "crates/studio-collab" }
 studio-plugins = { path = "crates/studio-plugins" }
 # The Awra framework (Dock, LevelMeter and canvas text come from this work)
-awra = { git = "https://github.com/MehdiSenhajYnov/Awra", rev = "cbc4fe52a42b6f6961d45bd8f7aef03b08b9f0e7" }
+awra = { git = "https://github.com/MehdiSenhajYnov/Awra", rev = "68a0eb93ef0a2816292b430d2a264d26ce380803" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -81,7 +81,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 [[package]]
 name = "awra"
 version = "2.0.0"
-source = "git+https://github.com/MehdiSenhajYnov/Awra?rev=cbc4fe52a42b6f6961d45bd8f7aef03b08b9f0e7#cbc4fe52a42b6f6961d45bd8f7aef03b08b9f0e7"
+source = "git+https://github.com/MehdiSenhajYnov/Awra?rev=68a0eb93ef0a2816292b430d2a264d26ce380803#68a0eb93ef0a2816292b430d2a264d26ce380803"
 dependencies = [
  "awra-sys",
 ]
@@ -109,7 +109,7 @@ dependencies = [
 [[package]]
 name = "awra-sys"
 version = "2.0.0"
-source = "git+https://github.com/MehdiSenhajYnov/Awra?rev=cbc4fe52a42b6f6961d45bd8f7aef03b08b9f0e7#cbc4fe52a42b6f6961d45bd8f7aef03b08b9f0e7"
+source = "git+https://github.com/MehdiSenhajYnov/Awra?rev=68a0eb93ef0a2816292b430d2a264d26ce380803#68a0eb93ef0a2816292b430d2a264d26ce380803"
 dependencies = [
  "cmake",
 ]
