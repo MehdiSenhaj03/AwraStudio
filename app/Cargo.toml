@@ -1,7 +1,26 @@
 [package]
 name = "awra-studio"
+description = "Awra Studio: a simple, AI-assisted, collaborative music studio built on Awra"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "awra-studio"
+path = "src/main.rs"
+
 [dependencies]
+awra.workspace = true
+studio-core.workspace = true
+studio-dsp.workspace = true
+studio-analysis.workspace = true
+studio-engine.workspace = true
+studio-ai.workspace = true
+studio-collab.workspace = true
+studio-plugins.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+dirs = "5"

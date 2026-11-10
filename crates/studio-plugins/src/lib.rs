@@ -214,6 +214,15 @@ impl PluginManager {
 
     /// A processor for a plugin slot (the mix graph's factory).
     pub fn create(&self, slot: &EffectSlot, sr: f64, max_block: usize) -> Option<Box<dyn Processor>> {
+        self.create_inner(slot, sr, max_block, true)
+    }
+
+    /// A processor not tracked by the manager (offline renders).
+    pub fn create_detached(&self, slot: &EffectSlot, sr: f64, max_block: usize) -> Option<Box<dyn Processor>> {
+        self.create_inner(slot, sr, max_block, false)
+    }
+
+    fn create_inner(&self, slot: &EffectSlot, sr: f64, max_block: usize, register: bool) -> Option<Box<dyn Processor>> {
         let EffectKind::Plugin { format, path, plugin_id, .. } = &slot.kind else { return None };
         let mut inner = self.inner.lock();
         let lib_key = path.clone();
@@ -256,7 +265,9 @@ impl PluginManager {
                 s.set_controller_param(k, *v);
             }
         }
-        inner.instances.insert(slot.id, inst);
+        if register {
+            inner.instances.insert(slot.id, inst);
+        }
         Some(proc_)
     }
 

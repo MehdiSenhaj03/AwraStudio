@@ -62,6 +62,21 @@ le travail après une perte de contexte).
 
 ## Journal
 
+- Framework Awra enrichi (commit séparé) : `awra::Dock` (espace de travail
+  à panneaux, arbre split/onglets sérialisable `h(0.7,a,v(0.5,b,c))`,
+  `t(0,a,b)`, mode édition avec barre déplacer/agrandir/masquer),
+  `awra::LevelMeter`, `Canvas::text` / `text_width` (+ C
+  `awra_canvas_text_width`, awra-sys régénéré par tools/gen_rust_sys.py).
+- App `studio/app` EN COURS : `studio.rs` (struct Studio : doc, assets,
+  engine, plugins, session+replica, IA via `aihost.rs` [worker thread +
+  ProxyHost, requêtes Snapshot/Commit/Layout/UndoAi servies dans `tick()`]),
+  `assets.rs` (décodage en arrière-plan + Peaks), `settings.rs`
+  (config_dir()/awra-studio/settings.json, `AWRA_STUDIO_CONFIG` pour
+  surcharger), `demo.rs` (projet démo synthétisé), `ui/mod.rs` (Ui : Dock,
+  panneaux trait `Panel{widget,refresh,tick}`, timer 33 ms `frame()`,
+  garde `updating()` contre la ré-entrance des signaux, presets
+  d'interface PRESETS, `apply_layout(LayoutCommand)`).
+
 - `studio-plugins` terminé : CLAP via `clap-sys` 0.5 (scan, instance,
   params, état, timers hôte, fenêtre flottante x11/win32), VST3 via le
   crate `vst3` 0.3 (bindings générés du SDK : composant, contrôleur

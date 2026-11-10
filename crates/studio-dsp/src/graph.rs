@@ -72,6 +72,8 @@ pub struct MixGraph {
     pub meters: Meters,
     /// False while stopped: only live input (monitoring) and tails play.
     pub play_clips: bool,
+    /// Every slot's parameters, pushed into adopted processors.
+    params: Vec<(Id, Vec<(String, f64)>)>,
 }
 
 pub const MAX_BLOCK: usize = 4096;
@@ -139,6 +141,13 @@ impl MixGraph {
             scratch_r: vec![0.0; MAX_BLOCK],
             meters: Meters::default(),
             play_clips: true,
+            params: project
+                .tracks
+                .iter()
+                .flat_map(|t| t.effects.iter())
+                .chain(project.master.effects.iter())
+                .map(|s| (s.id, s.params.iter().map(|(k, v)| (k.clone(), *v)).collect()))
+                .collect(),
         }
     }
 
@@ -196,6 +205,46 @@ impl MixGraph {
         let mv = self.master_volume.target;
         self.master_volume = old.master_volume;
         self.master_volume.set(mv);
+        self.play_clips = old.play_clips;
+        // adopted processors take the new graph's values (presets, variants)
+        let params = std::mem::take(&mut self.params);
+        for (id, ps) in &params {
+            let node = self
+                .tracks
+                .iter_mut()
+                .flat_map(|t| t.chain.iter_mut())
+                .chain(self.master.iter_mut())
+                .find(|n| n.id == *id);
+            if let Some(p) = node.and_then(|n| n.proc.as_mut()) {
+                p.set_bpm(self.bpm);
+                for (k, v) in ps {
+                    p.set_param(k, *v);
+                }
+            }
+        }
+        self.params = params;
+    }
+
+    /// Creates processors for the slots whose ids are not in `existing`
+    /// (on the UI thread, before sending the graph to the engine).
+    pub fn create_new(&mut self, project: &Project, existing: &[Id], factory: Option<&ProcessorFactory>) {
+        let sr = self.sr;
+        let bpm = project.bpm;
+        let fill = |nodes: &mut Vec<SlotNode>, slots: &[EffectSlot]| {
+            for (n, s) in nodes.iter_mut().zip(slots) {
+                if n.proc.is_none() && !existing.contains(&s.id) {
+                    n.proc = make_proc(s, sr, bpm, factory);
+                }
+            }
+        };
+        for (t, pt) in self.tracks.iter_mut().zip(project.tracks.iter()) {
+            fill(&mut t.chain, &pt.effects);
+        }
+        fill(&mut self.master, &project.master.effects);
+    }
+
+    pub fn all_slot_ids(project: &Project) -> Vec<Id> {
+        project.tracks.iter().flat_map(|t| t.effects.iter()).chain(project.master.effects.iter()).map(|s| s.id).collect()
     }
 
     /// Creates processors for slots that still have none (new slots), and
