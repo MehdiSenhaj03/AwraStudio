@@ -18,6 +18,8 @@ mod demo;
 mod settings;
 mod studio;
 mod ui;
+#[cfg(test)]
+mod tests;
 
 use std::cell::RefCell;
 use std::path::PathBuf;

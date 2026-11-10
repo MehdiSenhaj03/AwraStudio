@@ -62,6 +62,17 @@ le travail après une perte de contexte).
 
 ## Journal
 
+- App fonctionnelle et testée : `cargo test -p awra-studio` (4 tests :
+  edits/undo/moteur, tour d'IA via worker, export WAV, DEUX studios en
+  session loopback). Captures headless :
+  `awra-studio --screenshot out.png --demo [--layout mixing] [--select 1]
+  [--ask "…"] [--dark] [--size WxH]` (force AWRA_STUDIO_NO_AUDIO).
+  Captures de référence dans `studio/docs/screenshots/`.
+  Pièges rencontrés : SVG d'icônes → pas de `stroke` (le moteur remplit),
+  utiliser des chemins pleins ; tableaux `[a.as_ref(), …]` ambigus →
+  helper `ui::wd(&w)` ; `&ProcessorFactory` exige une closure 'static
+  (cloner le PluginManager).
+
 - Framework Awra enrichi (commit séparé) : `awra::Dock` (espace de travail
   à panneaux, arbre split/onglets sérialisable `h(0.7,a,v(0.5,b,c))`,
   `t(0,a,b)`, mode édition avec barre déplacer/agrandir/masquer),
