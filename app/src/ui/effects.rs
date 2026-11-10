@@ -25,17 +25,75 @@ pub struct EffectsPanel {
     root: awra::Box,
     title: awra::Label,
     target_switch: awra::SegmentedControl,
-    quick: awra::Box,
+    quick: awra::FlowBox,
     track_row: awra::Box,
     volume: awra::Slider,
     volume_label: awra::Label,
     pan: awra::Slider,
     list: awra::Box,
+    add: awra::Button,
     controls: RefCell<HashMap<(Id, String), Control>>,
     signature: RefCell<String>,
     advanced: Rc<RefCell<Vec<Id>>>,
+    /// The chain last shown (to slide in only what was just added).
+    shown: RefCell<(Option<Target>, Vec<Id>)>,
     s: S,
     window: awra::Window,
+}
+
+/// A palette of every built-in effect, each with what it does.
+fn effect_palette(s: &S, anchor: &awra::Button) {
+    if target_of(&s.borrow()).is_none() {
+        s.borrow_mut().toasts.push("Sélectionne d'abord une piste.".into());
+        return;
+    }
+    let pop = awra::Popover::new();
+    let grid = awra::Grid::new();
+    grid.set_row_spacing(4);
+    grid.set_column_spacing(4);
+    grid.set_margins(8, 8, 8, 8);
+    for (i, kind) in effects::BUILTIN.iter().enumerate() {
+        let spec = effects::spec(kind);
+        let b = awra::Button::new();
+        b.set_appearance(ButtonAppearance::Ghost);
+        let col = awra::Box::new(Orientation::Vertical, 1);
+        let n = label(spec.name, Typography::Body);
+        n.set_weight(600);
+        n.set_xalign(0.0);
+        let d = label(spec.description, Typography::Label);
+        d.set_xalign(0.0);
+        d.set_ellipsize(awra::pango::EllipsizeMode::End);
+        d.set_max_width_chars(26);
+        d.set_opacity(0.7);
+        col.append(&n);
+        col.append(&d);
+        b.set_child(Some(&col));
+        b.set_tooltip_text(Some(spec.description));
+        let (c, p, kind) = (s.clone(), pop.clone(), kind.clone());
+        b.connect_clicked(move |_| {
+            p.popdown();
+            add_effect(&c, kind.clone());
+        });
+        grid.attach(&b, (i % 2) as i32, (i / 2) as i32, 1, 1);
+    }
+    pop.set_child(Some(&grid));
+    pop.set_parent(anchor);
+    pop.popup();
+}
+
+fn add_effect(s: &S, kind: EffectKind) {
+    let mut st = s.borrow_mut();
+    let Some(t) = target_of(&st) else { return };
+    let len = chain(&st.doc.project, t).map(|c| c.len()).unwrap_or(0);
+    // dynamics and EQ before space effects
+    let index = match kind {
+        EffectKind::Reverb | EffectKind::Delay | EffectKind::Limiter => len,
+        _ => chain(&st.doc.project, t)
+            .and_then(|c| c.iter().position(|s| matches!(s.kind, EffectKind::Reverb | EffectKind::Delay | EffectKind::Limiter)))
+            .unwrap_or(len),
+    };
+    let name = effects::spec(&kind).name;
+    st.commit_ops(&format!("Ajout : {name}"), vec![Op::AddEffect { target: t, slot: EffectSlot::new(kind), index }]);
 }
 
 fn target_of(s: &Studio) -> Option<Target> {
@@ -74,7 +132,13 @@ impl EffectsPanel {
         top.append(&target_switch);
         root.append(&top);
 
-        let quick = awra::Box::new(Orientation::Horizontal, 6);
+        // quick chains wrap onto a second line rather than overflow
+        let quick = awra::FlowBox::new();
+        quick.set_selection_mode(awra::SelectionMode::None);
+        quick.set_row_spacing(6);
+        quick.set_column_spacing(6);
+        quick.set_max_children_per_line(6);
+        quick.set_halign(awra::Align::Start);
         root.append(&quick);
 
         let track_row = awra::Box::new(Orientation::Horizontal, 8);
@@ -96,14 +160,9 @@ impl EffectsPanel {
         let list = awra::Box::new(Orientation::Vertical, 8);
         root.append(&scrolled(&list));
 
-        let add_row = awra::Box::new(Orientation::Horizontal, 6);
-        let names: Vec<&str> = effects::BUILTIN.iter().map(|k| effects::spec(k).name).collect();
-        let dd = awra::Dropdown::from_strings(&names);
-        dd.set_hexpand(true);
-        let add = button("Ajouter l'effet", Some("list-add-symbolic"), ButtonAppearance::Secondary);
-        add_row.append(&dd);
-        add_row.append(&add);
-        root.append(&add_row);
+        let add = button("Ajouter un effet", Some("list-add-symbolic"), ButtonAppearance::Secondary);
+        add.set_halign(awra::Align::Start);
+        root.append(&add);
 
         let panel = Rc::new(EffectsPanel {
             root,
@@ -115,9 +174,11 @@ impl EffectsPanel {
             volume_label,
             pan: pan.clone(),
             list,
+            add: add.clone(),
             controls: RefCell::new(HashMap::new()),
             signature: RefCell::new(String::new()),
             advanced: Rc::new(RefCell::new(Vec::new())),
+            shown: RefCell::new((None, Vec::new())),
             s: s.clone(),
             window: window.clone(),
         });
@@ -131,22 +192,7 @@ impl EffectsPanel {
             st.ui_revision += 1;
         });
         let c = s.clone();
-        add.connect_clicked(move |_| {
-            let kind = effects::BUILTIN[dd.selected() as usize % effects::BUILTIN.len()].clone();
-            let mut st = c.borrow_mut();
-            if let Some(t) = target_of(&st) {
-                let len = chain(&st.doc.project, t).map(|c| c.len()).unwrap_or(0);
-                // dynamics and EQ before space effects
-                let index = match kind {
-                    EffectKind::Reverb | EffectKind::Delay | EffectKind::Limiter => len,
-                    _ => chain(&st.doc.project, t)
-                        .and_then(|c| c.iter().position(|s| matches!(s.kind, EffectKind::Reverb | EffectKind::Delay | EffectKind::Limiter)))
-                        .unwrap_or(len),
-                };
-                let name = effects::spec(&kind).name;
-                st.commit_ops(&format!("Ajout : {name}"), vec![Op::AddEffect { target: t, slot: EffectSlot::new(kind), index }]);
-            }
-        });
+        add.connect_clicked(move |b| effect_palette(&c, b));
         let c = s.clone();
         volume.connect_value_changed(move |sl| {
             if updating() {
@@ -175,19 +221,21 @@ impl EffectsPanel {
 
     fn rebuild(self: &EffectsPanel, s: &Studio) {
         super::clear(&self.list);
-        super::clear(&self.quick);
+        self.quick.remove_all();
         self.controls.borrow_mut().clear();
         let target = target_of(s);
         self.target_switch.set_selected(if s.show_master_chain { 1 } else { 0 });
         let Some(target) = target else {
             self.title.set_text("Effets");
             self.track_row.set_visible(false);
+            self.add.set_visible(false);
             let l = label("Sélectionne une piste dans la timeline pour voir et régler ses effets.", Typography::Muted);
             l.set_wrap(true);
             self.list.append(&l);
             return;
         };
         self.track_row.set_visible(true);
+        self.add.set_visible(true);
         let p = &s.doc.project;
         let (name, kind) = match target {
             Target::Master => ("Master".to_string(), None),
@@ -207,11 +255,9 @@ impl EffectsPanel {
             ],
             None => vec![("Mastering auto", "fais-moi un mastering propre".into()), ("Fort (club)", "mastering fort".into())],
         };
-        let ai = awra::Image::from_icon_name("awra-studio-ai-symbolic");
-        ai.set_tooltip_text(Some("Chaînes préparées par l'ingénieur IA (annulables)"));
-        self.quick.append(&ai);
         for (lbl, req) in quick {
-            let b = button(lbl, None, ButtonAppearance::Secondary);
+            let b = button(lbl, Some("awra-studio-ai-symbolic"), ButtonAppearance::Secondary);
+            b.set_tooltip_text(Some("Chaîne préparée par l'ingénieur IA (annulable)"));
             let c = self.s.clone();
             b.connect_clicked(move |_| c.borrow_mut().ask_ai_local(&req));
             self.quick.append(&b);
@@ -230,9 +276,18 @@ impl EffectsPanel {
             l.set_wrap(true);
             self.list.append(&l);
         }
+        // a card that was just added slides in; the others are just there
+        let mut shown = self.shown.borrow_mut();
+        let same = shown.0 == Some(target);
         for (i, slot) in ch.iter().enumerate() {
-            self.list.append(&self.card(s, target, slot, i, ch.len()));
+            let card = self.card(s, target, slot, i, ch.len());
+            if same && !shown.1.contains(&slot.id) {
+                self.list.append(&super::appear(&card, awra::RevealerTransitionType::SlideDown));
+            } else {
+                self.list.append(&card);
+            }
         }
+        *shown = (Some(target), ch.iter().map(|x| x.id).collect());
     }
 
     fn card(&self, s: &Studio, target: Target, slot: &EffectSlot, index: usize, len: usize) -> awra::Card {
@@ -289,13 +344,21 @@ impl EffectsPanel {
         let c = self.s.clone();
         del.connect_clicked(move |_| c.borrow_mut().commit_ops("Effet retiré", vec![Op::RemoveEffect { target, slot: sid }]));
 
-        let grid = awra::Grid::new();
-        grid.set_column_spacing(10);
-        grid.set_row_spacing(4);
+        // essentials always; the rest unfold below without a rebuild
+        let essentials = awra::Grid::new();
+        let extra = awra::Grid::new();
+        for g in [&essentials, &extra] {
+            g.set_column_spacing(10);
+            g.set_row_spacing(4);
+        }
         let show_all = self.advanced.borrow().contains(&slot.id);
         more.set_active(show_all);
+        let unfold = awra::Revealer::new();
+        unfold.set_transition_type(awra::RevealerTransitionType::SlideDown);
+        unfold.set_transition_duration(awra::motion_duration(&awra::StyleManager::default(), awra::MotionPreset::Normal));
+        unfold.set_reveal_child(show_all);
         let adv = self.advanced.clone();
-        let c = self.s.clone();
+        let u2 = unfold.clone();
         more.connect_toggled(move |b| {
             if updating() {
                 return;
@@ -306,15 +369,17 @@ impl EffectsPanel {
             } else {
                 a.retain(|x| *x != sid);
             }
-            c.borrow_mut().ui_revision += 1;
+            u2.set_reveal_child(b.is_active());
         });
         let mut row = 0;
+        let mut xrow = 0;
         if let EffectKind::Plugin { .. } = &slot.kind {
             match s.plugins.instance(slot.id) {
                 Some(inst) => {
                     let params = inst.params();
-                    let shown = if show_all { params.len() } else { params.len().min(8) };
-                    for p in params.iter().take(shown) {
+                    for (n, p) in params.iter().enumerate() {
+                        let (grid, row) = if n < 8 { (&essentials, &mut row) } else { (&extra, &mut xrow) };
+                        let row = { let r = *row; *row += 1; r };
                         let v = slot.params.get(&p.id).copied().unwrap_or(p.value);
                         let sl = awra::Slider::with_range(Orientation::Horizontal, 0.0, 1.0, 0.001);
                         sl.set_draw_value(false);
@@ -336,7 +401,6 @@ impl EffectsPanel {
                             c.borrow_mut().commit_ops("Réglage du plugin", vec![Op::SetParam { target, slot: sid, param: pid.clone(), value: v }]);
                         });
                         self.controls.borrow_mut().insert((sid, p.id.clone()), Control::Plugin(sl, p.min, span));
-                        row += 1;
                     }
                     if inst.has_gui() {
                         let open = button("Ouvrir l'interface du plugin", Some("view-reveal-symbolic"), ButtonAppearance::Secondary);
@@ -346,15 +410,17 @@ impl EffectsPanel {
                                 c.borrow_mut().toasts.push(e.to_string());
                             }
                         });
-                        grid.attach(&open, 0, row, 3, 1);
+                        essentials.attach(&open, 0, row, 3, 1);
                     }
                 }
                 None => {
-                    grid.attach(&label("Plugin introuvable sur cette machine (il est ignoré à la lecture).", Typography::Muted), 0, 0, 3, 1);
+                    essentials.attach(&label("Plugin introuvable sur cette machine (il est ignoré à la lecture).", Typography::Muted), 0, 0, 3, 1);
                 }
             }
         } else {
-            for p in effects::spec(&slot.kind).params.iter().filter(|p| show_all || p.essential) {
+            for p in effects::spec(&slot.kind).params.iter() {
+                let (grid, row) = if p.essential { (&essentials, &mut row) } else { (&extra, &mut xrow) };
+                let row = { let r = *row; *row += 1; r };
                 let v = slot.param(p.id);
                 let name = label(p.label, Typography::Label);
                 grid.attach(&name, 0, row, 1, 1);
@@ -411,15 +477,18 @@ impl EffectsPanel {
                         self.controls.borrow_mut().insert(key, Control::Slider(sl, val, *p));
                     }
                 }
-                row += 1;
             }
         }
-        col.append(&grid);
+        col.append(&essentials);
+        let more_col = awra::Box::new(Orientation::Vertical, 6);
+        if xrow > 0 {
+            more_col.append(&extra);
+        }
         let desc = label(effects::spec(&slot.kind).description, Typography::Muted);
         desc.set_wrap(true);
-        if show_all {
-            col.append(&desc);
-        }
+        more_col.append(&desc);
+        unfold.set_child(Some(&more_col));
+        col.append(&unfold);
         card.set_child(Some(&col));
         let _ = &self.window;
         card
@@ -498,7 +567,7 @@ impl Panel for EffectsPanel {
     }
 
     fn refresh(&self, s: &Studio) {
-        let sig = format!("{}|{:?}", signature(s), self.advanced.borrow());
+        let sig = signature(s);
         if *self.signature.borrow() != sig {
             *self.signature.borrow_mut() = sig;
             self.rebuild(s);

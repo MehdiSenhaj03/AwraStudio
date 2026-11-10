@@ -32,8 +32,37 @@ pub struct AiEntry {
     pub note: Option<String>,
 }
 
+/// A file being decoded before it lands in the timeline.
+#[derive(Clone, Debug)]
+pub struct PendingImport {
+    pub id: Id,
+    pub batch: Id,
+    pub name: String,
+    /// The track it goes to (None: a new one).
+    pub track: Option<Id>,
+    pub at: f64,
+}
+
+/// Things the interface does for the studio (dialogs, menus).
+#[derive(Clone, Debug, PartialEq)]
+pub enum UiAction {
+    ImportDialog,
+    Demo,
+}
+
+type ImportResult = (Id, PathBuf, Result<AudioBuffer, String>);
+
 pub struct Studio {
     pub doc: Document,
+    pub pending_imports: Vec<PendingImport>,
+    batch_ends: std::collections::HashMap<Id, f64>,
+    import_tx: Sender<ImportResult>,
+    import_rx: Receiver<ImportResult>,
+    pub ui_actions: Vec<UiAction>,
+    /// A track that just appeared (highlighted for a moment).
+    pub flash: Option<(Id, f64)>,
+    /// Files are being dragged over the window.
+    pub drag_over: bool,
     pub assets: AssetCache,
     pub engine: Engine,
     pub plugins: PluginManager,
@@ -89,8 +118,16 @@ impl Studio {
         engine.latency_ms = settings.latency_ms;
         let (req_tx, req_rx) = unbounded();
         let (ai_tx, ai_rx) = unbounded();
+        let (import_tx, import_rx) = unbounded();
         let mut s = Studio {
             doc,
+            pending_imports: Vec::new(),
+            batch_ends: Default::default(),
+            import_tx,
+            import_rx,
+            ui_actions: Vec::new(),
+            flash: None,
+            drag_over: false,
             assets: AssetCache::new(),
             engine,
             plugins,
@@ -309,19 +346,111 @@ impl Studio {
     // ------------------------------------------------------------------
     // Files
 
-    /// Imports audio files: the first into an instrumental when there is
-    /// none, the others as new tracks (or into `track` at `at`).
+    /// Imports audio files: decoded in the background, placed when ready.
+    /// Into `track` at `at`, one after the other; without a track, each
+    /// file makes a new track (the first an instrumental when there is
+    /// none).
     pub fn import_files(&mut self, paths: &[PathBuf], track: Option<Id>, at: f64) {
+        let batch = new_id();
         for p in paths {
             if !studio_dsp::io::is_audio_file(p) {
                 self.toasts.push(format!("{} n'est pas un fichier audio", p.display()));
                 continue;
             }
-            match self.import_one(p, track, at) {
+            let name = p.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let id = new_id();
+            self.pending_imports.push(PendingImport { id, batch, name, track, at: at.max(0.0) });
+            let (tx, path, rate) = (self.import_tx.clone(), p.clone(), self.doc.project.sample_rate);
+            std::thread::spawn(move || {
+                let r = studio_dsp::io::load(&path, rate).map_err(|e| e.to_string());
+                let _ = tx.send((id, path, r));
+            });
+        }
+        self.ui_revision += 1;
+    }
+
+    /// Places the imports that finished decoding.
+    fn pump_imports(&mut self) -> bool {
+        let mut any = false;
+        while let Ok((id, path, r)) = self.import_rx.try_recv() {
+            any = true;
+            let Some(i) = self.pending_imports.iter().position(|p| p.id == id) else { continue };
+            let pend = self.pending_imports.remove(i);
+            match r.map_err(anyhow::Error::msg).and_then(|buf| self.place_import(&path, buf, &pend)) {
                 Ok(name) => self.toasts.push(format!("« {name} » importé")),
-                Err(e) => self.toasts.push(format!("Import impossible : {e}")),
+                Err(e) => self.toasts.push(format!("Import impossible ({}) : {e}", pend.name)),
             }
         }
+        any
+    }
+
+    fn place_import(&mut self, path: &Path, buf: AudioBuffer, pend: &PendingImport) -> anyhow::Result<String> {
+        let (id, file) = self.doc.store_asset_file(path)?;
+        let info = AssetInfo {
+            id,
+            name: path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+            file,
+            kind: AssetKind::Import,
+            duration: buf.duration(),
+            channels: buf.channel_count() as u16,
+            sample_rate: buf.sample_rate,
+            author: Some(self.settings.user_name.clone()),
+        };
+        let stem = pend.name.clone();
+        // files of one drop on a track follow each other
+        let offset = self.batch_ends.get(&pend.batch).copied().unwrap_or(pend.at);
+        let start = if pend.track.is_some() { offset } else { pend.at };
+        self.batch_ends.insert(pend.batch, start + buf.duration());
+        let clip = Clip {
+            id: new_id(),
+            asset: info.id.clone(),
+            name: stem.clone(),
+            start,
+            offset: 0.0,
+            length: buf.duration(),
+            gain_db: 0.0,
+            fade_in: 0.0,
+            fade_out: 0.0,
+            muted: false,
+        };
+        self.assets.insert(&info.id, buf);
+        let mut ops = vec![Op::AddAsset { asset: info.clone() }];
+        let has_beat = self.doc.project.tracks.iter().any(|t| t.kind == TrackKind::Instrumental);
+        let mut is_beat = false;
+        let mut new_track = None;
+        match pend.track.filter(|t| self.doc.project.track(*t).is_some()) {
+            Some(t) => {
+                ops.push(Op::AddClip { track: t, clip });
+                self.selected = Some(t);
+            }
+            None => {
+                let kind = if has_beat { TrackKind::Audio } else { TrackKind::Instrumental };
+                is_beat = kind == TrackKind::Instrumental;
+                let mut t = Track::new(if is_beat { "Instru" } else { &stem }, kind);
+                if is_beat {
+                    t.color = "#e8b25c".into();
+                }
+                t.clips.push(clip);
+                new_track = Some(t.id);
+                let index = if is_beat { 0 } else { self.doc.project.tracks.len() };
+                ops.push(Op::AddTrack { track: t, index });
+            }
+        }
+        self.commit(Transaction::new(format!("Import de « {stem} »"), Actor::User, ops)).map_err(anyhow::Error::msg)?;
+        if let Some(t) = new_track {
+            self.selected = Some(t);
+            self.flash = Some((t, awra::now_ms()));
+        }
+        if let Some(s) = &self.session {
+            if let Ok(bytes) = std::fs::read(path) {
+                s.share_asset(&info.id, &info.file, Arc::new(bytes));
+            }
+        }
+        if is_beat && self.doc.project.key.is_none() {
+            // tempo and key of the beat, quietly in the background
+            self.ask_ai_local("Trouve la tonalité et le tempo de l'instru");
+        }
+        Ok(stem)
     }
 
     fn store_audio(&mut self, path: &Path, kind: AssetKind) -> anyhow::Result<(AssetInfo, AudioBuffer)> {
@@ -339,55 +468,6 @@ impl Studio {
             author: Some(self.settings.user_name.clone()),
         };
         Ok((info, buf))
-    }
-
-    fn import_one(&mut self, path: &Path, track: Option<Id>, at: f64) -> anyhow::Result<String> {
-        let (info, buf) = self.store_audio(path, AssetKind::Import)?;
-        let stem = path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        let has_beat = self.doc.project.tracks.iter().any(|t| t.kind == TrackKind::Instrumental);
-        let clip = Clip {
-            id: new_id(),
-            asset: info.id.clone(),
-            name: stem.clone(),
-            start: at.max(0.0),
-            offset: 0.0,
-            length: buf.duration(),
-            gain_db: 0.0,
-            fade_in: 0.0,
-            fade_out: 0.0,
-            muted: false,
-        };
-        self.assets.insert(&info.id, buf.clone());
-        let mut ops = vec![Op::AddAsset { asset: info.clone() }];
-        let is_beat;
-        match track.filter(|t| self.doc.project.track(*t).is_some()) {
-            Some(t) => {
-                ops.push(Op::AddClip { track: t, clip });
-                is_beat = false;
-            }
-            None => {
-                let kind = if has_beat { TrackKind::Audio } else { TrackKind::Instrumental };
-                is_beat = kind == TrackKind::Instrumental;
-                let mut t = Track::new(if is_beat { "Instru" } else { &stem }, kind);
-                if is_beat {
-                    t.color = "#e8b25c".into();
-                }
-                t.clips.push(clip);
-                let index = if is_beat { 0 } else { self.doc.project.tracks.len() };
-                ops.push(Op::AddTrack { track: t, index });
-            }
-        }
-        self.commit(Transaction::new(format!("Import de « {stem} »"), Actor::User, ops)).map_err(|e| anyhow::anyhow!(e))?;
-        if let Some(s) = &self.session {
-            if let Ok(bytes) = std::fs::read(path) {
-                s.share_asset(&info.id, &info.file, Arc::new(bytes));
-            }
-        }
-        if is_beat && self.doc.project.key.is_none() {
-            // tempo and key of the beat, quietly in the background
-            self.ask_ai_local("Trouve la tonalité et le tempo de l'instru");
-        }
-        Ok(stem)
     }
 
     pub fn add_reference(&mut self, path: &Path) {
@@ -907,6 +987,7 @@ impl Studio {
             self.toasts.push(format!("Lecture audio impossible : {e}"));
         }
         changed |= self.pump_ai();
+        changed |= self.pump_imports();
         if let Some(rx) = &self.join_rx {
             if let Ok(r) = rx.try_recv() {
                 self.join_rx = None;

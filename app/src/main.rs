@@ -86,6 +86,20 @@ fn main() {
                 st.selected = st.doc.project.tracks.get(n).map(|t| t.id);
                 st.ui_revision += 1;
             }
+            if let Some(name) = arg_value(&args, "--appearance") {
+                let a = match name.as_str() {
+                    "opaque" => ui::appearance::Appearance::opaque(),
+                    "clear" => ui::appearance::Appearance::clear_glass(),
+                    _ => ui::appearance::Appearance { panels: Some(0.6), cards: Some(0.9), lanes: Some(0.5), ..Default::default() },
+                };
+                ui::appearance::apply(&a);
+                s.borrow_mut().settings.appearance = a;
+            }
+            let settings_win = args.iter().any(|a| a == "--settings").then(|| {
+                let w = awra::Window::offscreen("Réglages", 680, 860, 1.0);
+                w.set_child(Some(&ui::settings_dialog::appearance_preview(&s)));
+                w
+            });
             if args.iter().any(|a| a == "--edit") {
                 ui.dock.set_editing(true);
             }
@@ -108,6 +122,16 @@ fn main() {
                     break;
                 }
             }
+            if let Some(xy) = arg_value(&args, "--drop-hover") {
+                // a file dragged over the timeline at x,y
+                if let Some((x, y)) = xy.split_once(',').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))) {
+                    let mut a = awra::signal_args(awra::sig::DROP_HOVER);
+                    a.active = true;
+                    a.x = x;
+                    a.y = y;
+                    ui.timeline_widget().emit_raw(&a);
+                }
+            }
             for _ in 0..10 {
                 awra::pump();
                 std::thread::sleep(Duration::from_millis(20));
@@ -127,6 +151,10 @@ fn main() {
                         eprintln!("{id}: w={} h={} mapped={} parents={}", w.width(), w.height(), w.is_mapped(), chain.join(" < "));
                     }
                 }
+            }
+            if let Some(w) = &settings_win {
+                w.render_offscreen(true);
+                w.snapshot_png(&png.replace(".png", "-settings.png"));
             }
             window.render_offscreen(true);
             if !window.snapshot_png(&png) {

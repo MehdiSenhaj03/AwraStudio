@@ -1,6 +1,5 @@
 //! The AI sound engineer: talk to it, it acts; every action can be undone.
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use awra::prelude::*;
@@ -14,10 +13,12 @@ pub struct AssistantPanel {
     provider: awra::Label,
     list: awra::Box,
     scroller: awra::ScrolledWindow,
-    busy_row: awra::Box,
-    busy_label: awra::Label,
+    busy_row: awra::Revealer,
+    busy: awra::TypingIndicator,
+    /// Entries shown, and undone actions counted, at the last refresh.
+    shown: std::cell::Cell<usize>,
+    undone: std::cell::Cell<usize>,
     entry: awra::Entry,
-    signature: RefCell<String>,
     s: S,
 }
 
@@ -51,13 +52,12 @@ impl AssistantPanel {
         let scroller = super::scrolled(&list);
         root.append(&scroller);
 
-        let busy_row = awra::Box::new(Orientation::Horizontal, 8);
-        let spinner = awra::Spinner::new();
-        spinner.start();
-        let busy_label = label("", Typography::Muted);
-        busy_row.append(&spinner);
-        busy_row.append(&busy_label);
-        busy_row.set_visible(false);
+        let busy = awra::TypingIndicator::new();
+        busy.set_halign(awra::Align::Start);
+        let busy_row = awra::Revealer::new();
+        busy_row.set_transition_type(awra::RevealerTransitionType::SlideUp);
+        busy_row.set_transition_duration(awra::motion_duration(&awra::StyleManager::default(), awra::MotionPreset::Fast));
+        busy_row.set_child(Some(&busy));
         root.append(&busy_row);
 
         let chips = awra::FlowBox::new();
@@ -90,9 +90,10 @@ impl AssistantPanel {
             list,
             scroller,
             busy_row,
-            busy_label,
+            busy,
+            shown: std::cell::Cell::new(0),
+            undone: std::cell::Cell::new(0),
             entry: entry.clone(),
-            signature: RefCell::new(String::new()),
             s: s.clone(),
         });
         let go = {
@@ -116,9 +117,12 @@ impl AssistantPanel {
         panel
     }
 
-    fn rebuild(&self, s: &Studio) {
-        super::clear(&self.list);
-        for (i, e) in s.ai_entries.iter().enumerate() {
+    /// Shows entries from `from` on (animated when `animate`).
+    fn rebuild(&self, s: &Studio, from: usize, animate: bool) {
+        if from == 0 {
+            super::clear(&self.list);
+        }
+        for (i, e) in s.ai_entries.iter().enumerate().skip(from) {
             let card = awra::Card::new();
             if e.user {
                 card.set_appearance(awra::CardAppearance::Tinted);
@@ -172,13 +176,17 @@ impl AssistantPanel {
                 col.append(&all);
             }
             card.set_child(Some(&col));
-            self.list.append(&card);
+            if animate {
+                let r = super::appear(&card, awra::RevealerTransitionType::SlideDown);
+                r.set_halign(if e.user { awra::Align::End } else { awra::Align::Fill });
+                self.list.append(&r);
+            } else {
+                self.list.append(&card);
+            }
         }
         // the newest message in view
         let sc = self.scroller.clone();
-        awra::glib::timeout_add_local_once(std::time::Duration::from_millis(60), move || {
-            sc.set_vvalue(1e9);
-        });
+        awra::glib::timeout_add_local_once(std::time::Duration::from_millis(40), move || super::scroll_to_end(&sc));
     }
 }
 
@@ -191,16 +199,16 @@ impl Panel for AssistantPanel {
         let cfg = &s.settings.ai;
         let model = cfg.model();
         self.provider.set_text(&if model.is_empty() { cfg.kind.label().to_string() } else { format!("{} · {model}", cfg.kind.label()) });
-        let sig = format!(
-            "{}|{}|{}",
-            s.ai_entries.len(),
-            s.ai_entries.iter().map(|e| e.undone.len()).sum::<usize>(),
-            s.ai_entries.last().map(|e| e.text.len()).unwrap_or(0)
-        );
-        if *self.signature.borrow() != sig {
-            *self.signature.borrow_mut() = sig;
-            self.rebuild(s);
+        let undone: usize = s.ai_entries.iter().map(|e| e.undone.len()).sum();
+        let n = s.ai_entries.len();
+        if n < self.shown.get() || undone != self.undone.get() || self.shown.get() == 0 {
+            // undone actions change older messages: show them all again
+            self.rebuild(s, 0, false);
+        } else if n > self.shown.get() {
+            self.rebuild(s, self.shown.get(), true);
         }
+        self.shown.set(n);
+        self.undone.set(undone);
         let _ = updating();
         let _ = &self.entry;
     }
@@ -208,10 +216,20 @@ impl Panel for AssistantPanel {
     fn tick(&self, s: &Studio) {
         match &s.ai_busy {
             Some(p) => {
-                self.busy_row.set_visible(true);
-                self.busy_label.set_text(p);
+                if !self.busy_row.reveals_child() {
+                    self.busy_row.set_reveal_child(true);
+                    self.busy.set_active(true);
+                }
+                if self.busy.label().as_deref() != Some(p.as_str()) {
+                    self.busy.set_label(Some(p));
+                }
             }
-            None => self.busy_row.set_visible(false),
+            None => {
+                if self.busy_row.reveals_child() {
+                    self.busy_row.set_reveal_child(false);
+                    self.busy.set_active(false);
+                }
+            }
         }
     }
 }

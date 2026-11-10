@@ -61,7 +61,7 @@ le travail après une perte de contexte).
 Toutes les briques sont livrées et testées (voir README.md pour l'usage,
 ARCHITECTURE.md pour la conception). Pistes pour la suite :
 - éditeur graphique VST3 intégré (IPlugView) ; fenêtres CLAP embarquées ;
-- pré-roll / décompte avant enregistrement, comping de prises ;
+- comping de prises ;
 - voix temps réel entre participants (Opus) et relais de NAT (STUN) ;
 - export MP3/FLAC ; stems ;
 - assistant créatif (toplines, flows, harmonies) en plus de l'ingénieur.
@@ -69,6 +69,39 @@ ARCHITECTURE.md pour la conception). Pistes pour la suite :
 (voir la section « Journal » plus bas, la plus récente en haut)
 
 ## Journal
+
+- Passe UI/UX (demande : bouton « + Audio » qui débordait, fond opaque,
+  transparence réglable par élément, micro-animations, glisser-déposer) :
+  - Timeline réécrite (`ui/timeline.rs`) : une pilule « + Ajouter une
+    piste » dans la colonne d'en-têtes (menu Voix / Adlibs / Audio / Instru
+    / Importer) remplace la rangée de boutons qui débordait ; survols,
+    curseurs, fantôme + ombre + ligne d'accroche au glisser de clip, zoom
+    et défilements adoucis, suivi de lecture lissé, formes d'onde en fondu,
+    surbrillance des nouvelles pistes, pastille R qui pulse. Projet vide :
+    « Importer une instru… » / « Essayer la démo ».
+  - Glisser-déposer externe : Awra donne la position pendant le survol
+    (DROP_HOVER) mais pas les fichiers → aperçu générique (piste visée
+    encadrée, clip fantôme, « Ajouter à « X » · mm:ss », ou rangée « +
+    Nouvelle piste »), puis décodage en arrière-plan
+    (`Studio::import_files` / `pump_imports`, imports en cours visibles).
+    Test `dropped_files_land_on_a_track_or_a_new_one`.
+  - Apparence (`ui/appearance.rs`, onglet « Apparence » des réglages) :
+    thème, accent, flou, préréglages Verre / Verre léger / Tout opaque,
+    opacité de 6 parties. S'appuie sur la nouvelle API Awra
+    `awra_style_set_material_opacity` (la teinte est composée sur le
+    canvas pour qu'une carte opaque garde la couleur du thème) ; fond des
+    panneaux dessiné par l'app (`panel_background`).
+  - Effets : palette d'effets (nom + description) au lieu d'une liste
+    déroulante, chaînes rapides qui passent à la ligne (FlowBox), réglages
+    avancés dépliés par un Revealer (sans reconstruction), cartes ajoutées
+    qui glissent. Assistant : messages ajoutés un à un en glissant,
+    indicateur de frappe, défilement adouci. Dock : fondus entre
+    dispositions et onglets. Bouton d'enregistrement qui « respire ».
+  - Awra (main `2c43dfa`) : opacité des matériaux, raccourcis de fenêtre
+    qui ne volent plus les touches tapées dans un champ (Espace/R/S),
+    transitions du Dock. `rev` mis à jour dans `Cargo.toml`.
+  - Captures : `awra-studio --screenshot x.png --demo [--dark]
+    [--appearance opaque|clear|panels] [--settings] [--drop-hover x,y]`.
 
 - Le studio a désormais son propre dépôt (`MehdiSenhajYnov/AwraStudio`,
   branche `main`), extrait avec son historique (`git subtree split`) du

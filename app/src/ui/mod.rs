@@ -1,6 +1,7 @@
 //! The interface: a header with the transport, and a dock of panels the
 //! user (or the AI) arranges.
 
+pub mod appearance;
 pub mod assistant;
 pub mod browser;
 pub mod effects;
@@ -55,6 +56,38 @@ pub trait Panel {
 /// A widget as `&Widget` (for lists of mixed widgets).
 pub fn wd<T: AsRef<Widget>>(t: &T) -> &Widget {
     t.as_ref()
+}
+
+/// A widget that appears with a short slide (after the next frame, so
+/// the motion plays).
+pub fn appear(child: &impl IsWidget, kind: awra::RevealerTransitionType) -> awra::Revealer {
+    let r = awra::Revealer::new();
+    r.set_transition_type(kind);
+    r.set_transition_duration(awra::motion_duration(&awra::StyleManager::default(), awra::MotionPreset::Normal));
+    r.set_child(Some(child));
+    r.set_reveal_child(false);
+    let r2 = r.clone();
+    awra::glib::timeout_add_local_once(Duration::from_millis(16), move || r2.set_reveal_child(true));
+    r
+}
+
+/// Scrolls to the end smoothly.
+pub fn scroll_to_end(sw: &awra::ScrolledWindow) {
+    let sw = sw.clone();
+    let mut steps = 0;
+    awra::glib::timeout_add_local(Duration::from_millis(16), move || {
+        let adj = sw.vadjustment();
+        let (v, upper, page) = (adj.value(), adj.upper(), adj.page_size());
+        let target = (upper - page).max(0.0);
+        let next = v + (target - v) * 0.3;
+        sw.set_vvalue(if (target - next).abs() < 1.0 { target } else { next });
+        steps += 1;
+        if (target - next).abs() < 1.0 || steps > 40 {
+            awra::glib::ControlFlow::Break
+        } else {
+            awra::glib::ControlFlow::Continue
+        }
+    });
 }
 
 pub fn label(text: &str, t: awra::Typography) -> awra::Label {
@@ -169,10 +202,12 @@ impl Ui {
             ("history", "Historique", history::HistoryPanel::new(s)),
         ];
         for (id, title, p) in &panels {
-            dock.add_panel(id, title, &p.widget());
+            dock.add_panel(id, title, &appearance::panel_background(&p.widget()));
         }
         let ui_header = header::HeaderUi::new(s, &window, &dock);
         window.set_titlebar(Some(&ui_header.header));
+        appearance::register_header(&ui_header.header);
+        appearance::apply(&s.borrow().settings.appearance);
         window.set_child(Some(&toasts));
 
         let layout = DockNode::parse(&s.borrow().settings.layout).or_else(|| preset("default")).unwrap();
@@ -203,6 +238,12 @@ impl Ui {
         {
             let s = s.clone();
             window.set_accepts_file_drops(true);
+            let s2 = s.clone();
+            wd(&window).connect_raw(awra::sig::DROP_HOVER, move |_, args| {
+                if let Ok(mut st) = s2.try_borrow_mut() {
+                    st.drag_over = args.active();
+                }
+            });
             window.connect_files_dropped(move |_, files| {
                 s.borrow_mut().import_files(&files, None, 0.0);
             });
@@ -211,7 +252,7 @@ impl Ui {
         {
             let ui2 = ui.clone();
             let s = s.clone();
-            awra::glib::timeout_add_local(Duration::from_millis(33), move || {
+            awra::glib::timeout_add_local(Duration::from_millis(16), move || {
                 ui2.frame(&s);
                 awra::glib::ControlFlow::Continue
             });
@@ -267,12 +308,18 @@ impl Ui {
 
     /// One frame: background work, then the views.
     pub fn frame(&self, s: &S) {
-        let (layout, toasts) = {
+        let (layout, toasts, actions) = {
             let Ok(mut st) = s.try_borrow_mut() else { return };
             st.tick();
-            timeline::follow(&mut st, self.timeline.width());
-            (std::mem::take(&mut st.layout_requests), std::mem::take(&mut st.toasts))
+            self.timeline.animate(&mut st);
+            (std::mem::take(&mut st.layout_requests), std::mem::take(&mut st.toasts), std::mem::take(&mut st.ui_actions))
         };
+        for a in actions {
+            match a {
+                crate::studio::UiAction::ImportDialog => self.header.import(s),
+                crate::studio::UiAction::Demo => load_demo(s),
+            }
+        }
         for cmd in layout {
             self.apply_layout(s, cmd);
         }
@@ -289,6 +336,10 @@ impl Ui {
                 p.tick(&st);
             }
         });
+    }
+
+    pub fn timeline_widget(&self) -> Widget {
+        self.timeline.widget()
     }
 
     pub fn apply_layout(&self, s: &S, cmd: LayoutCommand) {
@@ -345,4 +396,15 @@ impl Ui {
         }
         let _ = &self.effects;
     }
+}
+
+/// Opens the demo song.
+pub fn load_demo(s: &S) {
+    let (doc, bufs) = crate::demo::demo_document();
+    let mut st = s.borrow_mut();
+    st.set_document(doc);
+    for (id, b) in bufs {
+        st.assets.insert(&id, b);
+    }
+    st.rebuild_graph();
 }

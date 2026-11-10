@@ -34,6 +34,15 @@ serveur**. Construit en Rust sur le framework [Awra](https://github.com/MehdiSen
   code d'invitation. Pistes, prises (les fichiers voyagent), paroles,
   réglages, lecture synchronisée et discussion. Chiffré, pair à pair,
   aucun serveur : les projets restent sur vos machines.
+- **Glisser-déposer** : lâche un ou plusieurs fichiers audio sur une
+  piste (ils s'y posent à l'endroit visé, l'un après l'autre) ou sous les
+  pistes (chacun devient une nouvelle piste). Pendant le survol, un aperçu
+  montre la piste visée, l'emplacement calé sur la grille et le temps.
+- **Apparence** (`Projet → Réglages…` ou `Interface → Apparence et
+  transparence…`) : thème, couleur d'accent, verre flouté ou tout opaque,
+  et l'opacité de chaque partie (fond de la fenêtre, barre du haut,
+  panneaux, cartes, menus, pistes) réglable au pourcent, appliquée en
+  direct.
 - **Paroles** : un carnet de couplets / refrains partagé et lié à la
   timeline.
 - **Effets intégrés** : égaliseur, compresseur, noise gate, de-esser,
@@ -128,6 +137,10 @@ une fois le projet enregistré.
 | Mixage (thème sombre) | L'IA réorganise l'interface | Session à plusieurs |
 | --- | --- | --- |
 | ![](docs/screenshots/mixage-sombre.png) | ![](docs/screenshots/ia-interface.png) | ![](docs/screenshots/session.png) |
+
+| Glisser un fichier sur une piste | Apparence et transparence |
+| --- | --- |
+| ![](docs/screenshots/glisser-deposer.png) | ![](docs/screenshots/apparence.png) |
 
 La même interface sous Windows : [docs/screenshots/windows-wine.png](docs/screenshots/windows-wine.png).
 

@@ -24,6 +24,7 @@ pub struct Settings {
     pub sync_transport: bool,
     /// One bar before the take when recording from the middle.
     pub count_in: bool,
+    pub appearance: crate::ui::appearance::Appearance,
 }
 
 impl Default for Settings {
@@ -44,6 +45,7 @@ impl Default for Settings {
             try_upnp: true,
             sync_transport: true,
             count_in: true,
+            appearance: Default::default(),
         }
     }
 }

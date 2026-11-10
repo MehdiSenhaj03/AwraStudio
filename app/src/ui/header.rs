@@ -131,6 +131,7 @@ impl HeaderUi {
         let d = dock.clone();
         let c = s.clone();
         let l2 = layout.clone();
+        let win = window.clone();
         layout.connect_clicked(move |_| {
             let mut items: Vec<(&str, Box<dyn Fn()>)> = Vec::new();
             for (key, name, _) in PRESETS.iter() {
@@ -142,6 +143,8 @@ impl HeaderUi {
                 })));
             }
             items.push(("", Box::new(|| {})));
+            let (c3, w3) = (c.clone(), win.clone());
+            items.push(("Apparence et transparence…", Box::new(move || super::settings_dialog::open_appearance(&c3, &w3))));
             let d2 = d.clone();
             let c2 = c.clone();
             items.push((
@@ -185,21 +188,13 @@ impl HeaderUi {
                     st.set_document(doc);
                 }))),
                 ("Ouvrir un projet…", mk(Box::new(|ui, s| ui.open(s)))),
-                ("Projet de démonstration", mk(Box::new(|_, s| {
-                    let (doc, bufs) = crate::demo::demo_document();
-                    let mut st = s.borrow_mut();
-                    st.set_document(doc);
-                    for (id, b) in bufs {
-                        st.assets.insert(&id, b);
-                    }
-                    st.rebuild_graph();
-                }))),
+                ("Projet de démonstration", mk(Box::new(|_, s| super::load_demo(s)))),
                 ("", Box::new(|| {})),
                 ("Enregistrer", mk(Box::new(|ui, s| ui.save(s, false)))),
                 ("Enregistrer sous…", mk(Box::new(|ui, s| ui.save(s, true)))),
                 ("", Box::new(|| {})),
                 ("Importer de l'audio…", mk(Box::new(|ui, s| ui.import(s)))),
-                ("Réglages de l'assistant…", mk(Box::new(|ui, s| super::settings_dialog::open(s, &ui.window)))),
+                ("Réglages…", mk(Box::new(|ui, s| super::settings_dialog::open(s, &ui.window)))),
             ];
             popover_menu(&f2, items);
         });
@@ -305,6 +300,11 @@ impl HeaderUi {
         let playing = s.engine.is_playing();
         self.play.set_icon_name(if playing { "media-playback-pause-symbolic" } else { "media-playback-start-symbolic" });
         self.record.set_appearance(if s.recording.is_some() { ButtonAppearance::Destructive } else { ButtonAppearance::Secondary });
+        // a slow breath while recording
+        let o = if s.recording.is_some() { 0.78 + 0.22 * (awra::now_ms() / 1000.0 * std::f64::consts::PI * 1.4).cos() } else { 1.0 };
+        if (self.record.opacity() - o).abs() > 0.01 {
+            self.record.set_opacity(o);
+        }
     }
 }
 

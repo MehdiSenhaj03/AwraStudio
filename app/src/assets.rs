@@ -16,12 +16,14 @@ pub struct AssetCache {
     tx: Sender<(String, Result<AudioBuffer, String>)>,
     rx: Receiver<(String, Result<AudioBuffer, String>)>,
     pub errors: Vec<String>,
+    /// When each asset's audio arrived (its waveform fades in).
+    pub loaded_at: HashMap<String, f64>,
 }
 
 impl AssetCache {
     pub fn new() -> AssetCache {
         let (tx, rx) = unbounded();
-        AssetCache { store: AssetStore::new(), peaks: HashMap::new(), loading: HashSet::new(), tx, rx, errors: Vec::new() }
+        AssetCache { store: AssetStore::new(), peaks: HashMap::new(), loading: HashSet::new(), tx, rx, errors: Vec::new(), loaded_at: HashMap::new() }
     }
 
     pub fn is_loading(&self) -> bool {
@@ -45,6 +47,7 @@ impl AssetCache {
     /// Inserts an already decoded buffer (a fresh take).
     pub fn insert(&mut self, id: &str, buf: AudioBuffer) {
         self.peaks.insert(id.to_string(), Arc::new(Peaks::of(&buf)));
+        self.loaded_at.insert(id.to_string(), awra::now_ms());
         self.store.insert(id.to_string(), Arc::new(buf));
     }
 

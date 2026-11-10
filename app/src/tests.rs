@@ -134,3 +134,41 @@ fn two_studios_in_a_session() {
     pump_until(&mut [&mut a, &mut b], |s| s[0].chat.iter().any(|c| c.1.contains("refrain")));
     a.leave_session();
 }
+
+#[test]
+fn dropped_files_land_on_a_track_or_a_new_one() {
+    let mut s = studio("Sam");
+    let dir = std::env::temp_dir().join(format!("awra-drop-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let rate = s.doc.project.sample_rate;
+    let mut files = Vec::new();
+    for (name, secs) in [("a.wav", 1.0), ("b.wav", 2.0)] {
+        let p = dir.join(name);
+        let tone: Vec<f32> = (0..(rate as f64 * secs) as usize).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+        studio_dsp::io::write_wav(&p, &studio_dsp::AudioBuffer::from_mono(rate, tone), studio_dsp::io::WavFormat::Pcm16).unwrap();
+        files.push(p);
+    }
+    // onto an existing track: one after the other from the drop point
+    let voice = s.doc.project.tracks[1].id;
+    let before = s.doc.project.track(voice).unwrap().clips.len();
+    s.import_files(&files, Some(voice), 3.0);
+    assert_eq!(s.pending_imports.len(), 2);
+    pump_until(&mut [&mut s], |s| s[0].pending_imports.is_empty());
+    let t = s.doc.project.track(voice).unwrap();
+    assert_eq!(t.clips.len(), before + 2);
+    let mut starts: Vec<f64> = t.clips.iter().filter(|c| c.name == "a" || c.name == "b").map(|c| c.start).collect();
+    starts.sort_by(f64::total_cmp);
+    assert!((starts[0] - 3.0).abs() < 1e-6, "{starts:?}");
+    assert!((starts[1] - starts[0]).abs() > 0.9, "{starts:?}");
+    // onto nothing: a new track, undone in one step
+    let n = s.doc.project.tracks.len();
+    s.import_files(&files[..1], None, 0.5);
+    pump_until(&mut [&mut s], |s| s[0].pending_imports.is_empty());
+    assert_eq!(s.doc.project.tracks.len(), n + 1);
+    let last = s.doc.project.tracks.last().unwrap();
+    assert_eq!(last.kind, TrackKind::Audio);
+    assert!((last.clips[0].start - 0.5).abs() < 1e-6);
+    s.undo();
+    assert_eq!(s.doc.project.tracks.len(), n);
+    std::fs::remove_dir_all(dir).ok();
+}
