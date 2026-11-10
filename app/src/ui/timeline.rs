@@ -34,6 +34,10 @@ enum Drag {
     Clip { track: Id, clip: Id, from: f64, press_x: f64, moved: bool },
     Volume { track: Id },
     Scroll { press_x: f64, from: f64 },
+    /// An edge dragged: the clip as it was (start, offset, length) and the
+    /// most it can open (its sound's length).
+    Trim { track: Id, clip: Id, left: bool, start: f64, offset: f64, length: f64, max: f64 },
+    Fade { track: Id, clip: Id, out: bool },
 }
 
 /// What is under the pointer.
@@ -45,6 +49,9 @@ enum Hit {
     Volume(Id),
     Header(Id),
     Clip(Id, Id),
+    /// An edge or a fade handle of a clip: 0 left edge, 1 right edge, 2
+    /// fade in, 3 fade out.
+    Edge(Id, Id, u8),
     Lane(Id),
     AddPill,
     Empty(usize),
@@ -55,6 +62,10 @@ enum Action {
     None,
     TrackMenu(Id),
     AddMenu,
+    /// Right click on a clip, at a time.
+    ClipMenu(Id, Id, f64),
+    /// Right click on an empty part of a lane (or the ruler: None).
+    LaneMenu(Option<Id>, f64),
 }
 
 #[derive(Default)]
@@ -62,6 +73,10 @@ struct View {
     drag: Option<Drag>,
     preview: Option<(Id, f64)>,
     preview_loop: Option<(f64, f64)>,
+    /// A trim in progress: (clip, start, offset, length).
+    trim: Option<(Id, f64, f64, f64)>,
+    /// Fades being dragged: (clip, in, out).
+    fades: Option<(Id, f64, f64)>,
     width: f64,
     height: f64,
     hover: Option<Hit>,
@@ -190,7 +205,27 @@ fn hit(s: &Studio, v: &View, x: f64, y: f64) -> Hit {
         return Hit::Header(track);
     }
     match clip_at(s, track, t_of(s, x)) {
-        Some(c) => Hit::Clip(track, c.id),
+        Some(c) => {
+            let (x0, x1) = (x_of(s, c.start), x_of(s, c.end()));
+            if x1 - x0 > 30.0 {
+                // fade handles on the top edge, then the trim edges
+                if y <= ty + 20.0 {
+                    if (x - (x0 + c.fade_in * s.zoom).max(x0 + 6.0)).abs() <= 7.0 {
+                        return Hit::Edge(track, c.id, 2);
+                    }
+                    if (x - (x1 - c.fade_out * s.zoom).min(x1 - 6.0)).abs() <= 7.0 {
+                        return Hit::Edge(track, c.id, 3);
+                    }
+                }
+                if x - x0 <= 6.0 {
+                    return Hit::Edge(track, c.id, 0);
+                }
+                if x1 - x <= 6.0 {
+                    return Hit::Edge(track, c.id, 1);
+                }
+            }
+            Hit::Clip(track, c.id)
+        }
         None => Hit::Lane(track),
     }
 }
@@ -293,11 +328,13 @@ fn draw(s: &Studio, view: &mut View, c: &awra::Canvas, w: f64, h: f64) {
         c.fill_rect(HEAD_W, 0.0, w - HEAD_W, RULER_H - 1.0, &fg.with_alpha(0.03));
     }
     c.fill_rect(HEAD_W, RULER_H - 1.0, w - HEAD_W, 1.0, &sep);
-    // section flags; a label that would run into the next one is cut
-    let mut flags: Vec<(f64, &str)> = p.lyrics.iter().filter_map(|l| l.start.map(|t| (x_of(s, t), l.title.as_str()))).collect();
+    let warn = style("warning", RGBA::new(0.95, 0.6, 0.2, 1.0));
+    // section and marker flags; a label that would run into the next one is cut
+    let mut flags: Vec<(f64, &str, RGBA)> = p.lyrics.iter().filter_map(|l| l.start.map(|t| (x_of(s, t), l.title.as_str(), accent))).collect();
+    flags.extend(p.markers.iter().map(|m| (x_of(s, m.time), m.name.as_str(), warn)));
     flags.sort_by(|a, b| a.0.total_cmp(&b.0));
-    for (i, (x, title)) in flags.iter().enumerate() {
-        let (x, title) = (*x, *title);
+    for (i, (x, title, accent)) in flags.iter().enumerate() {
+        let (x, title, accent) = (*x, *title, *accent);
         let next = flags.get(i + 1).map(|f| f.0).unwrap_or(f64::INFINITY);
         if x >= HEAD_W && x < w {
             let room = next - x - 4.0;
@@ -308,6 +345,13 @@ fn draw(s: &Studio, view: &mut View, c: &awra::Canvas, w: f64, h: f64) {
                 c.fill_rect(x, 21.0, 1.5, 17.0, &accent);
                 c.text(x + 5.0, 21.0, title, Typography::Label, &accent);
             }
+        }
+    }
+    // markers: a faint line down the lanes (their flag joins the sections')
+    for m in &p.markers {
+        let x = x_of(s, m.time);
+        if x >= HEAD_W && x < w {
+            c.fill_rect(x, RULER_H, 1.0, h - RULER_H, &warn.with_alpha(0.35));
         }
     }
     if let Some((a, bb)) = view.preview_loop.or(p.loop_region) {
@@ -436,15 +480,25 @@ fn draw(s: &Studio, view: &mut View, c: &awra::Canvas, w: f64, h: f64) {
                 Some((id, st)) if id == clip.id => st,
                 _ => clip.start,
             };
+            // a trim or fades being dragged show as they will be
+            let (start, offset, length) = match view.trim {
+                Some((id, st, off, len)) if id == clip.id => (st, off, len),
+                _ => (start, clip.offset, clip.length),
+            };
+            let (fade_in, fade_out) = match view.fades {
+                Some((id, a, b)) if id == clip.id => (a, b),
+                _ => (clip.fade_in, clip.fade_out),
+            };
+            let trimming = matches!(view.trim, Some((id, ..)) if id == clip.id);
             let x0 = x_of(s, start);
-            let x1 = x_of(s, start + clip.length);
+            let x1 = x_of(s, start + length);
             if x1 < HEAD_W || x0 > w {
                 continue;
             }
             let cx0 = x0.max(HEAD_W);
             let cx1 = x1.min(w);
             let sel = s.selected_clip.map(|c| c.1) == Some(clip.id);
-            let hov = hover == Hit::Clip(t.id, clip.id);
+            let hov = matches!(hover, Hit::Clip(_, c) | Hit::Edge(_, c, _) if c == clip.id);
             if dragging {
                 // where it was, and a shadow under the moving one
                 let ox = x_of(s, clip.start).max(HEAD_W);
@@ -453,8 +507,8 @@ fn draw(s: &Studio, view: &mut View, c: &awra::Canvas, w: f64, h: f64) {
                 c.round_rect(cx0 + 3.0, y + 9.0, cx1 - cx0, TRACK_H - 10.0, 8.0, Some(&RGBA::new(0.0, 0.0, 0.0, 0.18)), 0.0, None);
                 c.fill_rect(x0.max(HEAD_W) - 1.0, RULER_H, 2.0, h - RULER_H, &accent.with_alpha(0.7));
             }
-            let fill = tc.with_alpha(if clip.muted { 0.08 } else if sel || dragging { 0.36 } else if hov { 0.28 } else { 0.22 });
-            let bw = if sel || dragging { 2.0 } else { 1.0 };
+            let fill = tc.with_alpha(if clip.muted { 0.08 } else if sel || dragging || trimming { 0.36 } else if hov { 0.28 } else { 0.22 });
+            let bw = if sel || dragging || trimming { 2.0 } else { 1.0 };
             c.round_rect(cx0, y + 5.0, cx1 - cx0, TRACK_H - 10.0, 7.0, Some(&fill), bw, Some(&tc.with_alpha(if sel || hov || dragging { 1.0 } else { 0.6 })));
             if let Some(pk) = s.assets.peaks.get(&clip.asset) {
                 let fade = s.assets.loaded_at.get(&clip.asset).map(|t0| ((t_now - t0) / 350.0).clamp(0.0, 1.0)).unwrap_or(1.0);
@@ -464,7 +518,7 @@ fn draw(s: &Studio, view: &mut View, c: &awra::Canvas, w: f64, h: f64) {
                 let wave = tc.with_alpha(0.85 * ease(fade) as f32);
                 let mut x = cx0.floor();
                 while x < cx1 {
-                    let ta = clip.offset + (x - x0) / s.zoom;
+                    let ta = offset + (x - x0) / s.zoom;
                     let (mn, mx) = pk.range(ta, ta + 1.0 / s.zoom);
                     let top = mid - (mx * gain).clamp(-1.0, 1.0) as f64 * amp;
                     let bot = mid - (mn * gain).clamp(-1.0, 1.0) as f64 * amp;
@@ -473,6 +527,47 @@ fn draw(s: &Studio, view: &mut View, c: &awra::Canvas, w: f64, h: f64) {
                 }
             } else {
                 shimmer(c, cx0, y + TRACK_H / 2.0 + 6.0, cx1 - cx0, &tc, t_now);
+            }
+            // fades: the faded part dimmed under a ramp, a handle on top
+            let top = y + 5.0;
+            let bot = y + TRACK_H - 5.0;
+            let shade = RGBA::new(0.0, 0.0, 0.0, if dark { 0.30 } else { 0.12 });
+            for (len, from_left) in [(fade_in, true), (fade_out, false)] {
+                let fw = len * s.zoom;
+                if fw >= 1.0 {
+                    let (a, b) = if from_left { (x0, x0 + fw) } else { (x1 - fw, x1) };
+                    let mut x = a.max(cx0);
+                    while x < b.min(cx1) {
+                        let k = if from_left { 1.0 - (x - a) / fw } else { (x - a) / fw };
+                        c.fill_rect(x, top, 2.0, (bot - top) * k, &shade);
+                        x += 2.0;
+                    }
+                    let (lx0, ly0, lx1, ly1) = if from_left { (a, bot, b, top) } else { (a, top, b, bot) };
+                    c.line(lx0, ly0, lx1, ly1, 1.2, &tc.with_alpha(0.9));
+                }
+            }
+            if (hov || sel) && x1 - x0 > 30.0 {
+                let hx_in = (x0 + fade_in * s.zoom).max(x0 + 6.0);
+                let hx_out = (x1 - fade_out * s.zoom).min(x1 - 6.0);
+                for (hx, k) in [(hx_in, 2u8), (hx_out, 3u8)] {
+                    if hx >= cx0 && hx <= cx1 {
+                        let on = hover == Hit::Edge(t.id, clip.id, k);
+                        c.circle(hx, top + 5.0, if on { 5.5 } else { 4.0 }, &if on { accent } else { tc });
+                        c.circle(hx, top + 5.0, if on { 2.5 } else { 1.8 }, &white);
+                    }
+                }
+                // trim grips on the edges
+                for (ex, k) in [(x0, 0u8), (x1, 1u8)] {
+                    if ex >= cx0 - 1.0 && ex <= cx1 + 1.0 && matches!(hover, Hit::Edge(_, c, kk) if c == clip.id && kk == k) {
+                        c.round_rect(ex - 2.0 + if k == 0 { 2.0 } else { -2.0 }, y + 22.0, 4.0, TRACK_H - 44.0, 2.0, Some(&accent), 0.0, None);
+                    }
+                }
+            }
+            if trimming {
+                let ex = if matches!(view.drag, Some(Drag::Trim { left: true, .. })) { x0 } else { x1 };
+                c.fill_rect(ex - 1.0, RULER_H, 2.0, h - RULER_H, &accent.with_alpha(0.8));
+                let label = super::fmt_time(length);
+                pill(c, (x1 - c.text_width(&label, Typography::Label) - 28.0).max(cx0 + 4.0), y + TRACK_H - 30.0, &label, &accent, &on_accent);
             }
             // the name sticks to the left edge of what is visible
             if cx1 - cx0 > 60.0 {
@@ -591,7 +686,39 @@ fn press(s: &mut Studio, view: &mut View, x: f64, y: f64, button: i32, n_press: 
         view.drag = Some(Drag::Scroll { press_x: x, from: s.scroll_x });
         return Action::None;
     }
+    // right click: the menu of what is under the pointer
+    if button == 3 && x > HEAD_W {
+        let t = t_of(s, x);
+        return match hit(s, view, x, y) {
+            Hit::Clip(track, clip) | Hit::Edge(track, clip, _) => {
+                s.selected = Some(track);
+                s.selected_clip = Some((track, clip));
+                s.show_master_chain = false;
+                s.ui_revision += 1;
+                Action::ClipMenu(track, clip, t)
+            }
+            Hit::Lane(track) => {
+                s.selected = Some(track);
+                s.ui_revision += 1;
+                Action::LaneMenu(Some(track), t)
+            }
+            Hit::Ruler | Hit::None => Action::LaneMenu(None, t),
+            _ => Action::None,
+        };
+    }
     match hit(s, view, x, y) {
+        Hit::Edge(track, clip, k) => {
+            s.selected = Some(track);
+            s.selected_clip = Some((track, clip));
+            if let Some(c) = s.doc.project.track(track).and_then(|t| t.clip(clip)).cloned() {
+                let max = crate::edit::asset_len(s, &c);
+                view.drag = Some(match k {
+                    0 | 1 => Drag::Trim { track, clip, left: k == 0, start: c.start, offset: c.offset, length: c.length, max },
+                    _ => Drag::Fade { track, clip, out: k == 3 },
+                });
+            }
+            s.ui_revision += 1;
+        }
         Hit::Empty(0) => s.ui_actions.push(UiAction::ImportDialog),
         Hit::Empty(_) => s.ui_actions.push(UiAction::Demo),
         Hit::Ruler => {
@@ -621,6 +748,9 @@ fn press(s: &mut Studio, view: &mut View, x: f64, y: f64, button: i32, n_press: 
                     }
                 }
             }
+        }
+        Hit::Volume(track) if n_press >= 2 => {
+            s.commit_ops("Volume à 0 dB", vec![Op::SetTrack { id: track, field: TrackField::VolumeDb(0.0) }]);
         }
         Hit::Volume(track) => {
             s.selected = Some(track);
@@ -693,6 +823,26 @@ fn motion(s: &mut Studio, view: &mut View, x: f64) {
             s.scroll_x = (from - (x - press_x) / s.zoom).max(0.0);
             view.scroll_target = None;
         }
+        Some(Drag::Trim { clip, left, start, offset, length, max, .. }) => {
+            let t = if shift_held() { t_of(s, x) } else { snap(s, t_of(s, x)) };
+            let min = crate::edit::MIN_CLIP;
+            view.trim = Some(if left {
+                // the left edge: as far back as the sound goes
+                let st = t.clamp((start - offset).max(0.0), start + length - min);
+                (clip, st, offset + (st - start), length - (st - start))
+            } else {
+                let end = t.clamp(start + min, start + (max - offset));
+                (clip, start, offset, end - start)
+            });
+        }
+        Some(Drag::Fade { track, clip, out }) => {
+            if let Some(c) = s.doc.project.track(track).and_then(|t| t.clip(clip)) {
+                let t = t_of(s, x);
+                let half = c.length / 2.0;
+                let (fi, fo) = if out { (c.fade_in, (c.end() - t).clamp(0.0, half)) } else { ((t - c.start).clamp(0.0, half), c.fade_out) };
+                view.fades = Some((clip, fi, fo));
+            }
+        }
         None => {}
     }
 }
@@ -706,24 +856,21 @@ fn release(s: &mut Studio, view: &mut View) {
     }
     if let Some(Drag::Clip { track, clip, moved: true, .. }) = view.drag {
         if let Some((_, st)) = view.preview {
-            s.commit_ops("Déplacement du clip", vec![Op::SetClip { track, clip, field: ClipField::Start(st) }]);
+            crate::edit::move_clip(s, track, clip, st);
         }
+    }
+    if let (Some(Drag::Trim { track, .. }), Some((clip, st, _, len))) = (view.drag, view.trim.take()) {
+        crate::edit::trim(s, track, clip, st, len);
+    }
+    if let (Some(Drag::Fade { track, .. }), Some((clip, fi, fo))) = (view.drag, view.fades.take()) {
+        crate::edit::set_fades(s, track, clip, fi, fo);
     }
     view.drag = None;
     view.preview = None;
 }
 
 pub fn split_at(s: &mut Studio, track: Id, clip: Id, at: f64) {
-    let Some(c) = s.doc.project.track(track).and_then(|t| t.clip(clip)).cloned() else { return };
-    if at <= c.start + 0.05 || at >= c.end() - 0.05 {
-        return;
-    }
-    let left = at - c.start;
-    let right = Clip { id: new_id(), start: at, offset: c.offset + left, length: c.length - left, fade_in: 0.005, ..c.clone() };
-    s.commit_ops(
-        "Couper le clip",
-        vec![Op::SetClip { track, clip, field: ClipField::Length(left) }, Op::SetClip { track, clip, field: ClipField::FadeOut(0.005) }, Op::AddClip { track, clip: right }],
-    );
+    crate::edit::split_at(s, track, clip, at);
 }
 
 thread_local! {
@@ -751,6 +898,189 @@ fn menu(area: &DrawingArea, x: f64, y: f64, items: Vec<(String, Box<dyn Fn()>)>)
             f();
         });
         col.append(&b);
+    }
+    pop.set_child(Some(&col));
+    pop.popup_at(area, x, y);
+}
+
+/// A menu entry that runs `f` on the studio.
+fn entry(pop: &awra::Popover, col: &awra::Box, s: &S, text: &str, key: Option<&str>, f: impl Fn(&mut Studio) + 'static) {
+    let b = super::menu_item(text, key);
+    let (p, s) = (pop.clone(), s.clone());
+    b.connect_clicked(move |_| {
+        p.popdown();
+        f(&mut s.borrow_mut());
+    });
+    col.append(&b);
+}
+
+fn sep(col: &awra::Box) {
+    col.append(&awra::Separator::new(awra::Orientation::Horizontal));
+}
+
+/// Right click on a clip: everything one does to a piece of audio.
+fn clip_menu(s: &S, area: &DrawingArea, track: Id, clip: Id, t: f64, x: f64, y: f64) {
+    let (c, others, playhead) = {
+        let st = s.borrow();
+        let Some(c) = st.doc.project.track(track).and_then(|tr| tr.clip(clip)).cloned() else { return };
+        let others: Vec<(Id, String)> = st.doc.project.tracks.iter().filter(|o| o.id != track).map(|o| (o.id, o.name.clone())).collect();
+        (c, others, st.engine.position())
+    };
+    let pop = awra::Popover::new();
+    let col = awra::Box::new(awra::Orientation::Vertical, 2);
+    col.set_margins(6, 6, 6, 6);
+    col.set_size_request(270, -1);
+    let title = super::label(&c.name, Typography::Label);
+    title.set_ellipsize(awra::pango::EllipsizeMode::End);
+    title.set_margins(4, 10, 4, 10);
+    col.append(&title);
+
+    // cutting
+    let at = t;
+    entry(&pop, &col, s, &format!("Couper ici ({})", super::fmt_time(at)), None, move |st| {
+        crate::edit::split_at(st, track, clip, at);
+    });
+    if playhead > c.start + crate::edit::MIN_CLIP && playhead < c.end() - crate::edit::MIN_CLIP {
+        entry(&pop, &col, s, "Couper à la tête de lecture", Some("S"), move |st| {
+            let at = st.engine.position();
+            crate::edit::split_at(st, track, clip, at);
+        });
+    }
+    sep(&col);
+    entry(&pop, &col, s, "Dupliquer", Some("Ctrl+D"), move |st| {
+        crate::edit::duplicate(st, track, clip);
+    });
+    entry(&pop, &col, s, "Copier", Some("Ctrl+C"), move |st| crate::edit::copy(st, track, clip));
+    entry(&pop, &col, s, "Couper (presse-papiers)", Some("Ctrl+X"), move |st| crate::edit::cut(st, track, clip));
+    if s.borrow().clipboard.is_some() {
+        entry(&pop, &col, s, "Coller ici", Some("Ctrl+V"), move |st| {
+            crate::edit::paste(st, Some(track), Some(at));
+        });
+    }
+    sep(&col);
+
+    // sound
+    entry(&pop, &col, s, if c.muted { "Réactiver le clip" } else { "Rendre muet" }, None, move |st| crate::edit::toggle_mute(st, track, clip));
+    entry(&pop, &col, s, "Normaliser (crête à −1 dB)", None, move |st| {
+        crate::edit::normalize(st, track, clip);
+    });
+    let has_fades = c.fade_in > 0.02 || c.fade_out > 0.02;
+    entry(&pop, &col, s, if has_fades { "Retirer les fondus" } else { "Fondus d'entrée et de sortie" }, None, move |st| {
+        if has_fades {
+            crate::edit::set_fades(st, track, clip, 0.0, 0.0);
+        } else {
+            crate::edit::set_fades(st, track, clip, 0.05, 0.3);
+        }
+    });
+    // clip gain, committed once when the menu closes
+    let row = awra::Box::new(awra::Orientation::Horizontal, 8);
+    row.set_margins(4, 10, 4, 10);
+    let gl = super::label("Gain", Typography::Label);
+    let gain = awra::Slider::with_range(awra::Orientation::Horizontal, -24.0, 12.0, 0.5);
+    gain.set_draw_value(false);
+    gain.set_hexpand(true);
+    gain.set_value(c.gain_db);
+    gain.set_origin(0.0);
+    let gv = super::label(&format!("{:+.1} dB", c.gain_db), Typography::Label);
+    gv.set_width_chars(8);
+    gv.set_tabular_digits(true);
+    let g2 = gv.clone();
+    gain.connect_value_changed(move |w| g2.set_text(&format!("{:+.1} dB", w.value())));
+    row.append(&gl);
+    row.append(&gain);
+    row.append(&gv);
+    col.append(&row);
+    {
+        let (s2, g, before) = (s.clone(), gain.clone(), c.gain_db);
+        pop.connect_closed(move |_| {
+            if (g.value() - before).abs() > 0.01 {
+                crate::edit::set_gain(&mut s2.borrow_mut(), track, clip, g.value());
+            }
+        });
+    }
+    sep(&col);
+
+    // placing
+    entry(&pop, &col, s, "Caler le début sur la mesure", None, move |st| crate::edit::snap_to_bar(st, track, clip));
+    let (a, b) = (c.start, c.end());
+    entry(&pop, &col, s, "Boucler sur ce clip", None, move |st| crate::edit::set_loop(st, a, b));
+    entry(&pop, &col, s, "Tête de lecture au début du clip", None, move |st| st.seek(a));
+    for (id, name) in others.into_iter().take(6) {
+        entry(&pop, &col, s, &format!("Déplacer vers « {name} »"), None, move |st| crate::edit::move_to_track(st, track, clip, id));
+    }
+    sep(&col);
+    // rename in place
+    let name = awra::Entry::new();
+    name.set_text(&c.name);
+    name.set_placeholder_text(Some("Nom du clip"));
+    name.set_hexpand(true);
+    let nrow = awra::Box::new(awra::Orientation::Horizontal, 8);
+    nrow.set_margins(2, 10, 2, 4);
+    nrow.append(&super::label("Nom", Typography::Label));
+    nrow.append(&name);
+    col.append(&nrow);
+    {
+        let s2 = s.clone();
+        let p2 = pop.clone();
+        name.connect_activate(move |e| {
+            let n = e.text();
+            if !n.trim().is_empty() {
+                s2.borrow_mut().commit_ops("Renommer le clip", vec![Op::SetClip { track, clip, field: ClipField::Name(n) }]);
+            }
+            p2.popdown();
+        });
+    }
+    let del = super::menu_item("Supprimer", Some("Suppr"));
+    {
+        let (p2, s2) = (pop.clone(), s.clone());
+        del.connect_clicked(move |_| {
+            p2.popdown();
+            crate::edit::delete(&mut s2.borrow_mut(), track, clip);
+        });
+    }
+    col.append(&del);
+    pop.set_child(Some(&col));
+    pop.popup_at(area, x, y);
+}
+
+/// Right click on an empty lane or the ruler.
+fn lane_menu(s: &S, area: &DrawingArea, track: Option<Id>, t: f64, x: f64, y: f64) {
+    let pop = awra::Popover::new();
+    let col = awra::Box::new(awra::Orientation::Vertical, 2);
+    col.set_margins(6, 6, 6, 6);
+    col.set_size_request(250, -1);
+    let at = t.max(0.0);
+    if s.borrow().clipboard.is_some() {
+        entry(&pop, &col, s, &format!("Coller ici ({})", super::fmt_time(at)), Some("Ctrl+V"), move |st| {
+            crate::edit::paste(st, track, Some(at));
+        });
+    }
+    entry(&pop, &col, s, "Placer la tête de lecture ici", None, move |st| st.seek(at));
+    entry(&pop, &col, s, "Ajouter un repère ici", None, move |st| crate::edit::add_marker(st, at, None));
+    let (a, b) = crate::edit::bar_at(&s.borrow(), at);
+    entry(&pop, &col, s, "Boucler sur cette mesure", None, move |st| crate::edit::set_loop(st, a, b));
+    let has_loop = s.borrow().doc.project.loop_region.is_some();
+    if has_loop {
+        entry(&pop, &col, s, "Retirer la boucle", None, |st| {
+            st.commit_ops("Boucle retirée", vec![Op::SetProject { field: studio_core::ops::ProjectField::LoopRegion(None) }]);
+        });
+    }
+    // markers near the click
+    let near: Vec<(Id, String)> = {
+        let st = s.borrow();
+        st.doc.project.markers.iter().filter(|m| ((m.time - at) * st.zoom).abs() < 40.0).map(|m| (m.id, m.name.clone())).collect()
+    };
+    for (id, name) in near {
+        entry(&pop, &col, s, &format!("Supprimer le repère « {name} »"), None, move |st| st.commit_ops("Repère supprimé", vec![Op::RemoveMarker { id }]));
+    }
+    sep(&col);
+    entry(&pop, &col, s, "Voir tout le morceau", Some("Ctrl+0"), crate::edit::zoom_to_fit);
+    if let Some(track) = track {
+        let (mute, solo) = s.borrow().doc.project.track(track).map(|t| (t.mute, t.solo)).unwrap_or_default();
+        sep(&col);
+        entry(&pop, &col, s, if mute { "Réactiver la piste" } else { "Rendre la piste muette" }, Some("M"), move |st| crate::edit::toggle_track(st, track, false));
+        entry(&pop, &col, s, if solo { "Retirer le solo" } else { "Écouter seule (solo)" }, None, move |st| crate::edit::toggle_track(st, track, true));
+        entry(&pop, &col, s, "Importer un fichier ici…", Some("Ctrl+I"), |st| st.ui_actions.push(UiAction::ImportDialog));
     }
     pop.set_child(Some(&col));
     pop.popup_at(area, x, y);
@@ -801,6 +1131,27 @@ fn track_menu(s: &S, area: &DrawingArea, track: Id, x: f64, y: f64) {
         colors.append(&b);
     }
     col.append(&colors);
+    let moves = awra::Box::new(awra::Orientation::Horizontal, 4);
+    let dup = super::button("Dupliquer", Some("edit-copy-symbolic"), awra::ButtonAppearance::Secondary);
+    dup.set_hexpand(true);
+    let up = super::button("", Some("go-up-symbolic"), awra::ButtonAppearance::Secondary);
+    up.set_tooltip_text(Some("Monter la piste"));
+    let down = super::button("", Some("go-down-symbolic"), awra::ButtonAppearance::Secondary);
+    down.set_tooltip_text(Some("Descendre la piste"));
+    for (b, f) in [(&dup, 0i32), (&up, -1), (&down, 1)] {
+        let (s2, p2) = (s.clone(), pop.clone());
+        b.connect_clicked(move |_| {
+            let mut st = s2.borrow_mut();
+            if f == 0 {
+                p2.popdown();
+                crate::edit::duplicate_track(&mut st, track);
+            } else {
+                crate::edit::move_track(&mut st, track, f);
+            }
+        });
+        moves.append(b);
+    }
+    col.append(&moves);
     let del = awra::Button::with_label("Supprimer la piste");
     del.set_appearance(awra::ButtonAppearance::Destructive);
     col.append(&del);
@@ -834,13 +1185,6 @@ fn track_menu(s: &S, area: &DrawingArea, track: Id, x: f64, y: f64) {
     pop.popup_at(area, x, y);
 }
 
-pub fn split_selected_clip(s: &mut Studio) {
-    if let Some((t, c)) = s.selected_clip {
-        let at = s.engine.position();
-        split_at(s, t, c, at);
-    }
-}
-
 pub fn delete_selected_clip(s: &mut Studio) {
     if let Some((t, c)) = s.selected_clip.take() {
         s.commit_ops("Supprimer le clip", vec![Op::RemoveClip { track: t, clip: c }]);
@@ -850,7 +1194,8 @@ pub fn delete_selected_clip(s: &mut Studio) {
 fn cursor_for(h: Hit, drag: Option<Drag>) -> &'static str {
     match (drag, h) {
         (Some(Drag::Clip { .. } | Drag::Scroll { .. }), _) => "grabbing",
-        (Some(Drag::Volume { .. }), _) => "ew-resize",
+        (Some(Drag::Volume { .. } | Drag::Trim { .. } | Drag::Fade { .. }), _) => "ew-resize",
+        (_, Hit::Edge(..)) => "ew-resize",
         (_, Hit::Clip(..)) => "grab",
         (_, Hit::Button(..) | Hit::AddPill | Hit::Empty(_) | Hit::Header(_)) => "pointer",
         (_, Hit::Volume(_)) => "ew-resize",
@@ -892,6 +1237,8 @@ impl TimelinePanel {
                         let y = add_row_y(&s.borrow()) + 12.0 + PILL_H + 2.0;
                         add_menu(&s, &ar, PILL_X + PILL_W / 2.0, y)
                     }
+                    Action::ClipMenu(track, clip, t) => clip_menu(&s, &ar, track, clip, t, args.x(), args.y()),
+                    Action::LaneMenu(track, t) => lane_menu(&s, &ar, track, t, args.x(), args.y()),
                     Action::None => {}
                 }
                 ar.queue_draw();

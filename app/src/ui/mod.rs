@@ -332,8 +332,51 @@ impl Ui {
         add("<Ctrl><Shift>z", Box::new(|s| s.borrow_mut().redo()));
         add("<Ctrl>y", Box::new(|s| s.borrow_mut().redo()));
         add("Home", Box::new(|s| s.borrow_mut().seek(0.0)));
+        // editing (a text field gets these keys first: they edit its text)
         add("Delete", Box::new(|s| timeline::delete_selected_clip(&mut s.borrow_mut())));
-        add("s", Box::new(|s| timeline::split_selected_clip(&mut s.borrow_mut())));
+        add("BackSpace", Box::new(|s| timeline::delete_selected_clip(&mut s.borrow_mut())));
+        add("s", Box::new(|s| {
+            crate::edit::split_at_playhead(&mut s.borrow_mut());
+        }));
+        let with_clip = |f: fn(&mut crate::studio::Studio, studio_core::model::Id, studio_core::model::Id)| -> Box<dyn Fn(&S)> {
+            Box::new(move |s: &S| {
+                let mut st = s.borrow_mut();
+                match st.selected_clip {
+                    Some((t, c)) => f(&mut st, t, c),
+                    None => st.toasts.push("Sélectionne d'abord un clip (clic dessus)".into()),
+                }
+            })
+        };
+        add("<Ctrl>d", with_clip(|st, t, c| {
+            crate::edit::duplicate(st, t, c);
+        }));
+        add("<Ctrl>c", with_clip(crate::edit::copy));
+        add("<Ctrl>x", with_clip(crate::edit::cut));
+        add("<Ctrl>v", Box::new(|s| {
+            crate::edit::paste(&mut s.borrow_mut(), None, None);
+        }));
+        add("<Ctrl>0", Box::new(|s| crate::edit::zoom_to_fit(&mut s.borrow_mut())));
+        add("Left", Box::new(|s| crate::edit::nudge_playhead(&mut s.borrow_mut(), -1.0)));
+        add("Right", Box::new(|s| crate::edit::nudge_playhead(&mut s.borrow_mut(), 1.0)));
+        add("<Shift>Left", Box::new(|s| crate::edit::nudge_playhead(&mut s.borrow_mut(), -4.0)));
+        add("<Shift>Right", Box::new(|s| crate::edit::nudge_playhead(&mut s.borrow_mut(), 4.0)));
+        add("End", Box::new(|s| {
+            let mut st = s.borrow_mut();
+            let end = st.doc.project.duration();
+            st.seek(end);
+        }));
+        add("m", Box::new(|s| {
+            let mut st = s.borrow_mut();
+            if let Some(t) = st.selected {
+                crate::edit::toggle_track(&mut st, t, false);
+            }
+        }));
+        add("Escape", Box::new(|s| {
+            let mut st = s.borrow_mut();
+            if st.selected_clip.take().is_some() {
+                st.ui_revision += 1;
+            }
+        }));
         let ui = self.clone();
         let s2 = s.clone();
         w.add_shortcut("<Ctrl>s", move |_| ui.header.save(&s2, false));

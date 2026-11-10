@@ -205,6 +205,10 @@ fn the_engineer_sees_and_drives_the_whole_app() {
     assert!(s.settings.metronome);
     ask(&mut s, "passe en mode sombre");
     assert_eq!(s.settings.appearance.theme, 2);
+    // edit by voice: split the voice at 4 s
+    let voice = s.doc.project.tracks[1].clone();
+    ask(&mut s, &format!("coupe {} à 0:04", voice.name));
+    assert_eq!(s.doc.project.tracks[1].clips.len(), voice.clips.len() + 1);
     // the full state, as the model reads it
     let st = crate::appctl::state(&s);
     assert_eq!(st["audio"]["input"], "Micro intégré");
@@ -218,4 +222,67 @@ fn the_engineer_sees_and_drives_the_whole_app() {
     assert!(r.is_ok());
     assert!(s.doc.project.tracks.iter().any(|t| t.name == "Choeurs"));
     assert!(crate::appctl::action(&mut s, &serde_json::json!({"action": "fly"})).is_err());
+}
+
+#[test]
+fn everyday_editing() {
+    use crate::edit;
+    let mut s = studio("Sam");
+    let voice = s.doc.project.tracks[1].id;
+    let first = s.doc.project.tracks[1].clips[0].clone();
+    let n0 = s.doc.project.tracks[1].clips.len();
+    // split where the playhead is (the right-click "Couper ici" does the same at the click)
+    let at = first.start + first.length / 2.0;
+    assert!(edit::split_at(&mut s, voice, first.id, at));
+    let t = s.doc.project.track(voice).unwrap();
+    assert_eq!(t.clips.len(), n0 + 1);
+    let left = t.clip(first.id).unwrap().clone();
+    let right = t.clips.iter().find(|c| (c.start - at).abs() < 1e-9).unwrap().clone();
+    assert!((left.end() - at).abs() < 1e-9);
+    assert!((right.offset - (first.offset + first.length / 2.0)).abs() < 1e-9, "the sound continues where it was cut");
+    // undo puts it back in one step
+    s.undo();
+    assert_eq!(s.doc.project.track(voice).unwrap().clips.len(), n0);
+    assert!(edit::split_at(&mut s, voice, first.id, at));
+
+    // duplicating the left half replaces what was under it (the right half): nothing doubles
+    let dup = edit::duplicate(&mut s, voice, first.id).unwrap();
+    let t = s.doc.project.track(voice).unwrap();
+    let d = t.clip(dup).unwrap();
+    assert!((d.start - at).abs() < 1e-9);
+    for c in t.clips.iter().filter(|c| c.id != dup) {
+        assert!(c.end() <= d.start + 1e-9 || c.start >= d.end() - 1e-9, "{c:?} under the copy");
+    }
+
+    // copy / paste at a time on another track
+    let adlibs = s.doc.project.tracks[3].id;
+    edit::copy(&mut s, voice, first.id);
+    assert!(edit::paste(&mut s, Some(adlibs), Some(30.0)));
+    assert!(s.doc.project.track(adlibs).unwrap().clips.iter().any(|c| (c.start - 30.0).abs() < 1e-9));
+
+    // trim the left edge: the sound stays where it was on the timeline
+    let c = s.doc.project.track(voice).unwrap().clip(first.id).unwrap().clone();
+    edit::trim(&mut s, voice, first.id, c.start + 1.0, c.length - 1.0);
+    let c2 = s.doc.project.track(voice).unwrap().clip(first.id).unwrap().clone();
+    assert!((c2.offset - (c.offset + 1.0)).abs() < 1e-9 && (c2.end() - c.end()).abs() < 1e-9);
+
+    // fades, gain, mute, normalize
+    edit::set_fades(&mut s, voice, first.id, 0.2, 0.5);
+    let c3 = s.doc.project.track(voice).unwrap().clip(first.id).unwrap().clone();
+    assert_eq!((c3.fade_in, c3.fade_out), (0.2, 0.5));
+    edit::toggle_mute(&mut s, voice, first.id);
+    assert!(s.doc.project.track(voice).unwrap().clip(first.id).unwrap().muted);
+    let g = edit::normalize(&mut s, voice, first.id).expect("normalized");
+    assert!((s.doc.project.track(voice).unwrap().clip(first.id).unwrap().gain_db - g).abs() < 1e-9);
+
+    // tracks and markers
+    let copy = edit::duplicate_track(&mut s, voice).unwrap();
+    let p = &s.doc.project;
+    let i = p.tracks.iter().position(|t| t.id == copy).unwrap();
+    assert_eq!(p.tracks[i - 1].id, voice);
+    assert_eq!(p.tracks[i].clips.len(), p.tracks[i - 1].clips.len());
+    edit::move_track(&mut s, copy, -1);
+    assert_eq!(s.doc.project.tracks[i - 1].id, copy);
+    edit::add_marker(&mut s, 12.0, None);
+    assert_eq!(s.doc.project.markers.len(), 1);
 }

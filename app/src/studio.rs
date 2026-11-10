@@ -114,6 +114,8 @@ pub struct Studio {
     /// What the interface shows (layout, panels…), kept by the UI for
     /// the agent.
     pub ui_info: serde_json::Value,
+    /// A copied clip and the track it came from (Ctrl+C / Ctrl+V).
+    pub clipboard: Option<(Id, Clip)>,
 }
 
 fn factory(pm: &PluginManager) -> impl Fn(&EffectSlot, f64, usize) -> Option<Box<dyn studio_dsp::Processor>> + 'static {
@@ -176,6 +178,7 @@ impl Studio {
             scan_rx: None,
             monitor_sent: None,
             ui_info: serde_json::Value::Null,
+            clipboard: None,
         };
         s.engine.send(Cmd::Metronome(s.settings.metronome));
         s.engine.send(Cmd::Bpm(s.doc.project.bpm));

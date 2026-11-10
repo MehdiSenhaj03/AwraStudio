@@ -70,6 +70,28 @@ ARCHITECTURE.md pour la conception). Pistes pour la suite :
 
 ## Journal
 
+- Édition au quotidien (demande : « clic droit sur un enregistrement →
+  diviser en 2 à la tête de lecture, et plein d'autres petits trucs ») :
+  `app/src/edit.rs` regroupe les opérations (une étape annulable chacune),
+  utilisées par la timeline, le clavier et l'IA : couper (au clic, à la
+  tête de lecture), dupliquer, copier / couper / coller, supprimer, muet,
+  gain, normaliser (crête à −1 dB), fondus, rogner, déplacer vers une
+  piste, caler sur la mesure, boucler, repères, dupliquer / monter /
+  descendre une piste, voir tout, avancer d'un temps. Un clip posé
+  (dupliqué, collé, déplacé, rogné) remplace ce qui était dessous
+  (`make_room`), comme dans les DAW. Timeline : menus clic droit (clip,
+  piste vide, règle), bords de clip à glisser (rognage, durée affichée),
+  pastilles de fondu en haut des clips, rampes de fondu dessinées,
+  repères sur la règle (même rangée que les sections, sans chevauchement),
+  double-clic sur le volume → 0 dB. Raccourcis : S, Ctrl+D/C/X/V, Suppr /
+  Retour arrière, flèches (Maj : mesure), Fin, M, Ctrl+0, Échap. IA :
+  duplicate_clip, copy_clip/paste, trim_clip, move_clip, set_fades,
+  normalize_clip, mute_clip, duplicate_track, move_track, add_marker,
+  zoom_to_fit ; l'ingénieur local comprend « coupe la voix à 1:20 ».
+  Awra (main) : dans un champ texte, toute touche va d'abord au champ (les
+  raccourcis de la fenêtre seulement s'il ne s'en sert pas) — Suppr dans
+  les paroles effaçait le clip sélectionné. Test `everyday_editing`.
+
 - Micro, retour casque et IA aux pleins pouvoirs (demande : « choix du
   micro introuvable », « l'IA ne sait pas quel micro j'ai, donne-lui un
   accès intégral », « retour micro le plus instantané possible ») :

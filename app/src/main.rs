@@ -16,6 +16,7 @@ mod aihost;
 mod appctl;
 mod assets;
 mod demo;
+mod edit;
 mod settings;
 mod studio;
 mod ui;

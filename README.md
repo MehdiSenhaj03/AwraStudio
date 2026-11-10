@@ -132,11 +132,23 @@ L'exécutable ne dépend que de DLL du système.
 | `R` | enregistrer sur la piste sélectionnée (en crée une au besoin) |
 | `Début` | revenir au début |
 | `Ctrl+Z` / `Ctrl+Maj+Z` | annuler / rétablir |
-| `S` / double-clic sur un clip | couper le clip |
-| `Suppr` | supprimer le clip sélectionné |
+| `S` | couper à la tête de lecture (piste sélectionnée) |
+| double-clic sur un clip | le couper à cet endroit |
+| clic droit sur un clip | couper ici, dupliquer, copier, muet, normaliser, fondus, gain, caler, boucler, déplacer vers une piste, renommer, supprimer |
+| clic droit sur la timeline / la règle | coller, tête de lecture, repère, boucle sur la mesure, voir tout |
+| glisser un bord de clip / une pastille en haut | rogner / régler le fondu (`Maj` : sans aimanter) |
+| `Ctrl+D` | dupliquer le clip (la copie remplace ce qui était dessous) |
+| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | copier / couper / coller le clip à la tête de lecture |
+| `Suppr` / `Retour arrière` | supprimer le clip sélectionné |
+| `←` / `→` (`Maj` : par mesure) | avancer / reculer d'un temps |
+| `Fin` | aller à la fin du morceau |
+| `M` | rendre muette la piste sélectionnée |
+| `Ctrl+0` | voir tout le morceau |
+| `Échap` | désélectionner le clip |
+| double-clic sur le volume d'une piste | remettre à 0 dB |
 | `Ctrl+molette` | zoom ; `Maj+molette` : défiler dans le temps |
 | `Maj+glisser` sur la règle | boucle (double-clic sur la règle : la retirer) |
-| double-clic / clic droit sur une piste | renommer, type, couleur, supprimer |
+| double-clic / clic droit sur une piste | renommer, type, couleur, dupliquer, monter / descendre, supprimer |
 | `Ctrl+E` | personnaliser l'interface |
 | `Ctrl+S` | enregistrer le projet |
 | `Ctrl+N` / `Ctrl+O` | nouveau projet / ouvrir un projet |

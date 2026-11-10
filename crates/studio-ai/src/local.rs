@@ -444,6 +444,16 @@ fn say(v: Result<Value, String>) -> String {
 
 /// "1:20", "1 min 20", "80 s", "à 45" → seconds.
 fn time_in(t: &str) -> Option<f64> {
+    // what follows "à" first ("la voix 2 à 1:30" is at 1:30, not 2 s)
+    if let Some(i) = t.rfind(" a ") {
+        if let Some(v) = time_in_words(&t[i + 3..]) {
+            return Some(v);
+        }
+    }
+    time_in_words(t)
+}
+
+fn time_in_words(t: &str) -> Option<f64> {
     let words: Vec<&str> = t.split_whitespace().collect();
     for (i, w) in words.iter().enumerate() {
         if let Some((m, s)) = w.split_once(':') {
@@ -590,6 +600,17 @@ fn app_request(host: &mut dyn StudioHost, t: &str) -> Option<String> {
     }
     if has(t, &["retablis", "refais", "redo"]) && short {
         return Some(say(host.app_action(&json!({"action": "redo"}))));
+    }
+
+    // split at a time: "coupe la voix à 1:20", "divise la prise en deux à 30 s"
+    if has(t, &["coupe", "divise", "separe", "scinde", "split"]) && !has(t, &["coupe le son", "coupe le micro", "coupe le metronome", "coupe l'autotune"]) {
+        if let Some(at) = time_in(t) {
+            let p = host.project();
+            let track = p.tracks.iter().find(|tr| t.contains(&normalize(&tr.name))).or_else(|| p.tracks.iter().find(|tr| tr.kind == TrackKind::Vocal)).map(|tr| tr.name.clone());
+            if let Some(track) = track {
+                return Some(say(host.app_action(&json!({"action": "split_clip", "track": track, "at": at}))));
+            }
+        }
     }
 
     // files

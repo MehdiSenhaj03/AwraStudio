@@ -269,6 +269,92 @@ pub fn action(s: &mut Studio, v: &Value) -> Result<Value, String> {
             crate::ui::timeline::split_at(s, t, clip, at);
             ok(format!("Clip coupé à {}.", crate::ui::fmt_time(at)))
         }
+        "duplicate_clip" | "normalize_clip" | "mute_clip" | "set_fades" | "trim_clip" | "move_clip" | "copy_clip" => {
+            let t = track_id(s, v)?;
+            let clip = match sv(v, "clip").and_then(|c| c.parse::<u64>().ok()) {
+                Some(c) => c,
+                // the clip under a time, else the track's first
+                None => {
+                    let at = fv(v, "at").unwrap_or(-1.0);
+                    let tr = s.doc.project.track(t).ok_or("piste introuvable")?;
+                    tr.clips.iter().find(|c| c.start <= at && c.end() >= at).or(tr.clips.first()).map(|c| c.id).ok_or("cette piste n'a aucun clip")?
+                }
+            };
+            match a.as_str() {
+                "duplicate_clip" => {
+                    let id = crate::edit::duplicate(s, t, clip).ok_or("clip introuvable")?;
+                    Ok(json!({"ok": true, "clip": id.to_string(), "say": "Clip dupliqué juste après."}))
+                }
+                "normalize_clip" => {
+                    let g = crate::edit::normalize(s, t, clip).ok_or("normalisation impossible")?;
+                    ok(format!("Clip normalisé ({g:+.1} dB)."))
+                }
+                "mute_clip" => {
+                    crate::edit::toggle_mute(s, t, clip);
+                    ok("Clip muet / réactivé.")
+                }
+                "set_fades" => {
+                    crate::edit::set_fades(s, t, clip, fv(v, "fade_in").unwrap_or(0.0), fv(v, "fade_out").unwrap_or(0.0));
+                    ok("Fondus réglés.")
+                }
+                "trim_clip" => {
+                    let c = s.doc.project.track(t).and_then(|x| x.clip(clip)).cloned().ok_or("clip introuvable")?;
+                    let start = fv(v, "start").unwrap_or(c.start).max(c.start - c.offset).max(0.0);
+                    let end = fv(v, "end").unwrap_or(c.end()).min(c.start - c.offset + crate::edit::asset_len(s, &c));
+                    if end - start < crate::edit::MIN_CLIP {
+                        return Err("le clip serait vide".into());
+                    }
+                    crate::edit::trim(s, t, clip, start, end - start);
+                    ok("Clip rogné.")
+                }
+                "move_clip" => {
+                    if let Some(to) = sv(v, "to_track") {
+                        let to = match resolve_track(&s.doc.project, &to) {
+                            Some(Target::Track(id)) => id,
+                            _ => return Err(format!("piste « {to} » introuvable")),
+                        };
+                        crate::edit::move_to_track(s, t, clip, to);
+                        if let Some(st) = fv(v, "start") {
+                            crate::edit::move_clip(s, to, clip, st.max(0.0));
+                        }
+                    } else {
+                        crate::edit::move_clip(s, t, clip, fv(v, "start").ok_or("start attendu")?.max(0.0));
+                    }
+                    ok("Clip déplacé.")
+                }
+                _ => {
+                    crate::edit::copy(s, t, clip);
+                    ok("Clip copié (paste pour le coller).")
+                }
+            }
+        }
+        "paste" => {
+            let track = if v.get("track").is_some() { Some(track_id(s, v)?) } else { None };
+            if crate::edit::paste(s, track, fv(v, "at")) {
+                ok("Collé.")
+            } else {
+                Err("rien à coller".into())
+            }
+        }
+        "duplicate_track" => {
+            let t = track_id(s, v)?;
+            let id = crate::edit::duplicate_track(s, t).ok_or("piste introuvable")?;
+            Ok(json!({"ok": true, "track": id.to_string(), "say": "Piste dupliquée."}))
+        }
+        "move_track" => {
+            let t = track_id(s, v)?;
+            crate::edit::move_track(s, t, v.get("delta").and_then(Value::as_i64).unwrap_or(1) as i32);
+            ok("Piste déplacée.")
+        }
+        "add_marker" => {
+            let t = fv(v, "time").unwrap_or_else(|| s.engine.position());
+            crate::edit::add_marker(s, t, sv(v, "name"));
+            ok(format!("Repère ajouté à {}.", crate::ui::fmt_time(t)))
+        }
+        "zoom_to_fit" => {
+            crate::edit::zoom_to_fit(s);
+            ok("Tout le morceau est visible.")
+        }
         "delete_clip" => {
             let t = track_id(s, v)?;
             let c = sv(v, "clip").and_then(|c| c.parse::<u64>().ok()).ok_or("clip (id) attendu")?;
