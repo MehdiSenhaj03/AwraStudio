@@ -196,6 +196,9 @@ fn drop_target(s: &Studio, x: f64, y: f64) -> (Option<Id>, f64) {
     match track_at(s, y) {
         Some((_, id)) if x > HEAD_W => (Some(id), snap(s, t_of(s, x))),
         Some((_, id)) => (Some(id), 0.0),
+        // a new track: the first instrumental starts the song, anything
+        // else starts where it was dropped
+        None if x > HEAD_W && s.doc.project.tracks.iter().any(|t| t.kind == TrackKind::Instrumental) => (None, snap(s, t_of(s, x))),
         None => (None, 0.0),
     }
 }
@@ -301,13 +304,15 @@ fn draw(s: &Studio, view: &mut View, c: &awra::Canvas, w: f64, h: f64) {
         let cy = (h + RULER_H) / 2.0;
         let breathe = 0.7 + 0.3 * ((t_now / 900.0).sin() * 0.5 + 0.5);
         c.icon("awra-studio-wave-symbolic", cx - 18.0, cy - 100.0, 36.0, &accent.with_alpha(breathe as f32));
-        let msg = "Glisse ton instru ici pour commencer";
+        let dropping = view.drop.is_some();
+        let msg = if dropping { "Lâche pour poser ton instru" } else { "Glisse ton instru ici pour commencer" };
         let tw = c.text_width(msg, Typography::Title2);
-        c.text(cx - tw / 2.0, cy - 54.0, msg, Typography::Title2, &fg);
-        let sub = "MP3, WAV, FLAC, OGG, M4A — elle devient la première piste";
+        c.text(cx - tw / 2.0, cy - 54.0, msg, Typography::Title2, if dropping { &accent } else { &fg });
+        let sub = if dropping { "Elle devient la première piste ; tempo et tonalité sont détectés" } else { "MP3, WAV, FLAC, OGG, M4A — elle devient la première piste" };
         let sw = c.text_width(sub, Typography::Body);
         c.text(cx - sw / 2.0, cy - 20.0, sub, Typography::Body, &muted);
-        let labels = ["Importer une instru…", "Essayer la démo"];
+        let labels: &[&str] = if dropping { &[] } else { &["Importer une instru…", "Essayer la démo"] };
+        let labels = labels;
         let widths: Vec<f64> = labels.iter().map(|l| c.text_width(l, Typography::Body) + 36.0).collect();
         let total = widths.iter().sum::<f64>() + 12.0;
         let mut x = cx - total / 2.0;
@@ -506,8 +511,11 @@ fn draw(s: &Studio, view: &mut View, c: &awra::Canvas, w: f64, h: f64) {
         match target.and_then(|id| p.tracks.iter().position(|t| t.id == id).map(|i| (i, id))) {
             Some((i, id)) => {
                 let y = track_y(s, i);
-                c.fill_rect(0.0, y, w, TRACK_H, &accent.with_alpha(0.08));
-                c.round_rect(1.0, y + 1.0, w - 2.0, TRACK_H - 2.0, 8.0, None, 2.0, Some(&accent.with_alpha(0.8 * glow)));
+                // the header only says which track; the frame is on the lane
+                c.fill_rect(0.0, y, HEAD_W, TRACK_H, &accent.with_alpha(0.07));
+                c.round_rect(2.0, y + 8.0, 3.0, TRACK_H - 16.0, 1.5, Some(&accent), 0.0, None);
+                c.fill_rect(HEAD_W, y, w - HEAD_W, TRACK_H, &accent.with_alpha(0.06));
+                c.round_rect(HEAD_W + 2.0, y + 1.0, w - HEAD_W - 4.0, TRACK_H - 2.0, 8.0, None, 2.0, Some(&accent.with_alpha(0.8 * glow)));
                 let x0 = x_of(s, at).max(HEAD_W);
                 let x1 = x_of(s, at + GHOST_LEN).min(w);
                 if x1 > x0 {
@@ -520,17 +528,27 @@ fn draw(s: &Studio, view: &mut View, c: &awra::Canvas, w: f64, h: f64) {
                 pill(c, lx, y + TRACK_H - 30.0, &label, &accent, &on_accent);
             }
             None => {
+                // a ghost track: its name in the header column, the clip on
+                // the lane where it will start
                 let y = add_row_y(s);
-                c.round_rect(6.0, y + 4.0, w - 12.0, TRACK_H - 8.0, 10.0, Some(&accent.with_alpha(0.12 * glow)), 2.0, Some(&accent.with_alpha(0.8 * glow)));
                 let has_beat = p.tracks.iter().any(|t| t.kind == TrackKind::Instrumental);
-                let label = if has_beat { "+  Nouvelle piste" } else { "+  Nouvelle piste — l'instru" };
-                let tw = c.text_width(label, Typography::Title3);
-                c.text((w - tw) / 2.0, y + TRACK_H / 2.0 - 12.0, label, Typography::Title3, &accent);
+                c.round_rect(PILL_X, y + 6.0, PILL_W, TRACK_H - 12.0, 9.0, Some(&accent.with_alpha(0.10 * glow)), 1.5, Some(&accent.with_alpha(0.6 * glow)));
+                c.text(PILL_X + 12.0, y + 14.0, "+  Nouvelle piste", Typography::Label, &accent);
+                c.text(PILL_X + 12.0, y + 34.0, if has_beat { "Audio" } else { "Instru" }, Typography::Label, &muted);
+                let x0 = x_of(s, at).max(HEAD_W + 2.0);
+                let x1 = x_of(s, at + GHOST_LEN).min(w - 2.0);
+                if x1 > x0 {
+                    c.round_rect(x0, y + 6.0, x1 - x0, TRACK_H - 12.0, 7.0, Some(&accent.with_alpha(0.24 * glow)), 1.5, Some(&accent));
+                }
+                c.fill_rect(x0 - 1.0, RULER_H, 2.0, h - RULER_H, &accent.with_alpha(0.9));
+                let label = if has_beat { format!("Nouvelle piste · {}", super::fmt_time(at)) } else { "Nouvelle piste — l'instru".to_string() };
+                let lx = (x0 + 8.0).min(w - c.text_width(&label, Typography::Label) - 30.0).max(HEAD_W + 4.0);
+                pill(c, lx, y + TRACK_H - 30.0, &label, &accent, &on_accent);
             }
         }
     } else if s.drag_over {
         // files over the window, not yet here: invite them in
-        c.round_rect(2.0, RULER_H + 2.0, w - 4.0, h - RULER_H - 4.0, 12.0, None, 2.0, Some(&accent.with_alpha(0.5)));
+        c.round_rect(HEAD_W + 2.0, RULER_H + 2.0, w - HEAD_W - 4.0, h - RULER_H - 4.0, 12.0, None, 2.0, Some(&accent.with_alpha(0.5)));
     }
 
     c.fill_rect(HEAD_W - 1.0, 0.0, 1.0, h, &sep);
