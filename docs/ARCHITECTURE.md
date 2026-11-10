@@ -3,7 +3,7 @@
 # Awra Studio — architecture
 
 ```
-studio/
+AwraStudio/
   crates/
     studio-core      modèle du projet, opérations inversibles, historique, persistance
     studio-dsp       buffers, décodage, effets, autotune, débruiteur, loudness, graphe de mix

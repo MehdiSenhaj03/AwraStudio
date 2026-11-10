@@ -1,6 +1,6 @@
 #!/bin/sh
 # Installs Awra Studio for the current user (~/.local): the binary, the
-# menu entry and the icon. Run from studio/ after a release build.
+# menu entry and the icon. Run after a release build.
 set -e
 here="$(cd "$(dirname "$0")" && pwd)"
 bin="$here/../target/release/awra-studio"

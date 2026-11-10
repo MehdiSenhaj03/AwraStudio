@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Awra Studio: tests on Fedora (the main Linux target) and Windows, a
+# Windows build cross-compiled with MinGW, interface screenshots.
+
+name: Awra Studio
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  fedora:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    env:
+      AWRA_STUDIO_NO_AUDIO: "1"
+    steps:
+      - name: Dependencies
+        run: >-
+          dnf install -y gcc gcc-c++ cmake ninja-build make pkgconf-pkg-config git
+          wayland-devel libxkbcommon-devel alsa-lib-devel fontconfig-devel
+          rust cargo
+      - uses: actions/checkout@v4
+      - name: Studio tests
+        run: cargo test --workspace
+      - name: Release build
+        run: cargo build --release -p awra-studio
+      - name: Screenshots
+        run: |
+          mkdir -p shots
+          ./target/release/awra-studio --screenshot shots/demo.png --demo
+          ./target/release/awra-studio --screenshot shots/finaliser.png --demo --select 1 --ask "Finalise le son, style mélodique"
+          ./target/release/awra-studio --screenshot shots/mixage-sombre.png --demo --layout mixing --dark
+      - uses: actions/upload-artifact@v4
+        with:
+          name: awra-studio-linux
+          path: |
+            target/release/awra-studio
+            shots/*.png
+
+  windows:
+    runs-on: windows-latest
+    env:
+      AWRA_STUDIO_NO_AUDIO: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Studio tests
+        run: cargo test --workspace
+      - name: Release build
+        run: cargo build --release -p awra-studio
+      - uses: actions/upload-artifact@v4
+        with:
+          name: awra-studio-windows-msvc
+          path: target/release/awra-studio.exe
+
+  windows-mingw-cross:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - name: MinGW
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64 cmake ninja-build
+      - name: Cross build
+        run: cargo build --release --target x86_64-pc-windows-gnu -p awra-studio
+      - uses: actions/upload-artifact@v4
+        with:
+          name: awra-studio-windows-mingw
+          path: target/x86_64-pc-windows-gnu/release/awra-studio.exe

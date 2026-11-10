@@ -4,7 +4,7 @@
 
 Un studio musical natif, simple à prendre en main, libre d'aller loin, avec
 un **ingénieur du son IA qui agit** et des **sessions à plusieurs sans
-serveur**. Construit en Rust sur le framework [Awra](../README.md).
+serveur**. Construit en Rust sur le framework [Awra](https://github.com/MehdiSenhajYnov/Awra).
 
 ![Awra Studio : l'IA vient de finaliser un morceau](docs/screenshots/ia-finaliser.png)
 
@@ -60,12 +60,19 @@ modèle échoue, l'ingénieur local prend le relais.
 
 ## Installer depuis les sources
 
+```sh
+git clone https://github.com/MehdiSenhajYnov/AwraStudio
+cd AwraStudio
+```
+
+Cargo récupère le framework Awra (dépendance git, épinglée) et le compile
+avec CMake.
+
 ### Fedora (Wayland ou X11)
 
 ```sh
 sudo dnf install gcc gcc-c++ cmake ninja-build pkgconf-pkg-config \
     wayland-devel libxkbcommon-devel alsa-lib-devel rust cargo
-cd studio
 cargo build --release -p awra-studio
 ./target/release/awra-studio            # ou --demo pour le morceau de démonstration
 ./packaging/install-linux.sh            # raccourci dans le menu des applications
@@ -76,10 +83,9 @@ L'audio passe par ALSA, donc par PipeWire sur Fedora (paquet
 
 ### Windows
 
-Avec Rust (MSVC) et CMake installés :
+Avec Rust (MSVC), CMake et Git installés :
 
 ```powershell
-cd studio
 cargo build --release -p awra-studio
 .\target\release\awra-studio.exe
 ```
