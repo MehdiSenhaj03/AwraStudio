@@ -62,6 +62,25 @@ le travail après une perte de contexte).
 
 ## Journal
 
+- `studio-ai` terminé (10 tests dont 3 d'intégration : document réel →
+  rendu → analyse → actions → undo). Points clés :
+  - `host::StudioHost` = ce que l'app doit fournir (project, analyses,
+    measure_lufs, commit, layout, plugins, undo_ai). Appelé depuis un
+    thread de travail dans l'app (proxy par canaux vers le thread UI).
+  - `tools.rs` : 22 outils JSON (get_project, analyze_*, set_track,
+    add/set/remove_effect, build_vocal_chain, balance_mix, master,
+    match_reference, create_variants, apply_variant, finish_song,
+    set_layout, set_song_info, add_lyrics, list/add_plugin, undo_last_ai).
+  - `local.rs` : ingénieur hors-ligne (règles FR/EN → mêmes outils) ;
+    comprend tous les exemples de la vision (test dédié).
+  - `agent.rs` : Anthropic Messages API (en-tête anthropic-version
+    2026-10-21, modèle par défaut claude-opus-5-5, `fallbacks: "default"`
+    + beta server-side-fallback-2026-07-01, blocs assistant renvoyés tels
+    quels), OpenAI Chat Completions (+ compatibles : Ollama par défaut
+    http://localhost:11434/v1), ponts CLI Codex (`codex exec`, connexion
+    `codex login` = Sign in with ChatGPT) et Claude Code (`claude -p`)
+    via protocole JSON {say, calls, done}. En cas d'échec → ingénieur local.
+
 - Crates terminées et testées : `studio-core` (7 tests), `studio-dsp`
   (16 tests : effets, autotune qui ramène 450 Hz → 440 Hz, débruiteur STFT,
   loudness BS.1770, graphe de mix), `studio-analysis` (5 tests : tempo,
