@@ -71,6 +71,7 @@ pub struct Studio {
     pub export_busy: bool,
     export_rx: Option<Receiver<Result<(PathBuf, f64, f64), String>>>,
     pub scan_busy: bool,
+    last_autosave: f64,
     scan_rx: Option<Receiver<Vec<studio_plugins::PluginDesc>>>,
 }
 
@@ -120,6 +121,7 @@ impl Studio {
             export_busy: false,
             export_rx: None,
             scan_busy: false,
+            last_autosave: awra::now_ms(),
             scan_rx: None,
         };
         s.engine.send(Cmd::Metronome(s.settings.metronome));
@@ -871,6 +873,14 @@ impl Studio {
                 self.settings.plugins = list;
                 self.settings.save();
                 changed = true;
+            }
+        }
+        // autosave a saved project every two minutes
+        let now = awra::now_ms();
+        if now - self.last_autosave > 120_000.0 {
+            self.last_autosave = now;
+            if self.doc.dirty && !self.doc.is_temporary() && self.recording.is_none() {
+                let _ = self.save(None);
             }
         }
         if changed {

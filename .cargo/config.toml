@@ -1,0 +1,10 @@
+# Cross-compiling for Windows from Linux with MinGW-w64 (posix threads):
+#   rustup target add x86_64-pc-windows-gnu
+#   cargo build --release --target x86_64-pc-windows-gnu -p awra-studio
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc-posix"
+
+[env]
+CC_x86_64_pc_windows_gnu = "x86_64-w64-mingw32-gcc-posix"
+CXX_x86_64_pc_windows_gnu = "x86_64-w64-mingw32-g++-posix"
+AR_x86_64_pc_windows_gnu = "x86_64-w64-mingw32-ar"

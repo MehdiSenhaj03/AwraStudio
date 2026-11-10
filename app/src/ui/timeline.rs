@@ -23,6 +23,7 @@ const ADD_H: f64 = 48.0;
 #[derive(Clone, Copy, Debug)]
 enum Drag {
     Seek,
+    Loop { from: f64 },
     Clip { track: Id, clip: Id, from: f64, press_x: f64, moved: bool },
     Volume { track: Id },
     Scroll { press_x: f64, from: f64 },
@@ -32,6 +33,7 @@ enum Drag {
 struct View {
     drag: Option<Drag>,
     preview: Option<(Id, f64)>,
+    preview_loop: Option<(f64, f64)>,
     width: f64,
     height: f64,
 }
@@ -127,7 +129,7 @@ fn draw(s: &Studio, view: &View, c: &awra::Canvas, w: f64, h: f64) {
             }
         }
     }
-    if let Some((a, bb)) = p.loop_region {
+    if let Some((a, bb)) = view.preview_loop.or(p.loop_region) {
         let (xa, xb) = (x_of(s, a).max(HEAD_W), x_of(s, bb));
         if xb > xa {
             c.fill_rect(xa, 0.0, xb - xa, RULER_H - 2.0, &accent.with_alpha(0.12));
@@ -291,6 +293,14 @@ fn add_button_at(c_width: impl Fn(&str) -> f64, x: f64) -> Option<TrackKind> {
     None
 }
 
+thread_local! {
+    static SHIFT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn shift_held() -> bool {
+    SHIFT.with(|s| s.get())
+}
+
 fn approx_width(text: &str) -> f64 {
     text.chars().count() as f64 * 7.2
 }
@@ -321,6 +331,15 @@ fn press(s: &mut Studio, view: &mut View, x: f64, y: f64, button: i32, n_press: 
     if y < RULER_H {
         if x > HEAD_W {
             let t = t_of(s, x);
+            if n_press >= 2 {
+                // a double click on the ruler removes the loop
+                s.commit_ops("Boucle retirée", vec![Op::SetProject { field: studio_core::ops::ProjectField::LoopRegion(None) }]);
+                return;
+            }
+            if shift_held() {
+                view.drag = Some(Drag::Loop { from: snap(s, t) });
+                return;
+            }
             s.seek(t);
             view.drag = Some(Drag::Seek);
         }
@@ -401,6 +420,10 @@ fn motion(s: &mut Studio, view: &mut View, x: f64, _y: f64) {
             let t = t_of(s, x.max(HEAD_W));
             s.seek(t);
         }
+        Some(Drag::Loop { from }) => {
+            let t = snap(s, t_of(s, x.max(HEAD_W)));
+            view.preview_loop = Some((from.min(t), from.max(t)));
+        }
         Some(Drag::Clip { track, clip, from, press_x, moved }) => {
             let dt = (x - press_x) / s.zoom;
             if moved || (x - press_x).abs() > 3.0 {
@@ -423,6 +446,12 @@ fn motion(s: &mut Studio, view: &mut View, x: f64, _y: f64) {
 }
 
 fn release(s: &mut Studio, view: &mut View) {
+    if let Some((a, b)) = view.preview_loop.take() {
+        if b - a > 0.2 {
+            s.commit_ops("Boucle", vec![Op::SetProject { field: studio_core::ops::ProjectField::LoopRegion(Some((a, b))) }]);
+            s.seek(a);
+        }
+    }
     if let Some(Drag::Clip { track, clip, moved: true, .. }) = view.drag {
         if let Some((_, st)) = view.preview {
             s.commit_ops("Déplacement du clip", vec![Op::SetClip { track, clip, field: ClipField::Start(st) }]);
@@ -443,6 +472,69 @@ fn split_at(s: &mut Studio, track: Id, clip: Id, at: f64) {
         "Couper le clip",
         vec![Op::SetClip { track, clip, field: ClipField::Length(left) }, Op::SetClip { track, clip, field: ClipField::FadeOut(0.005) }, Op::AddClip { track, clip: right }],
     );
+}
+
+/// Rename, change the kind or colour of a track, or delete it.
+fn track_menu(s: &S, area: &DrawingArea, track: Id, x: f64, y: f64) {
+    let Some(t) = s.borrow().doc.project.track(track).cloned() else { return };
+    let pop = awra::Popover::new();
+    let col = awra::Box::new(awra::Orientation::Vertical, 8);
+    col.set_margins(10, 10, 10, 10);
+    let name = awra::Entry::new();
+    name.set_text(&t.name);
+    col.append(&name);
+    let kinds = [TrackKind::Vocal, TrackKind::Adlib, TrackKind::Instrumental, TrackKind::Audio];
+    let kd = awra::Dropdown::from_strings(&["Voix", "Adlibs", "Instru", "Audio"]);
+    kd.set_selected(kinds.iter().position(|k| *k == t.kind).unwrap_or(0) as u32);
+    col.append(&kd);
+    let colors = awra::Box::new(awra::Orientation::Horizontal, 4);
+    for c in TRACK_COLORS {
+        let b = awra::Button::new();
+        let sw = DrawingArea::with_canvas(move |_, cv, w, h| {
+            cv.round_rect(0.0, 0.0, w as f64, h as f64, 4.0, Some(&color(c)), 0.0, None);
+        });
+        sw.set_content_size(16, 16);
+        b.set_child(Some(&sw));
+        b.set_appearance(awra::ButtonAppearance::Ghost);
+        let (s2, p2) = (s.clone(), pop.clone());
+        b.connect_clicked(move |_| {
+            s2.borrow_mut().commit_ops("Couleur", vec![Op::SetTrack { id: track, field: TrackField::Color(c.to_string()) }]);
+            p2.popdown();
+        });
+        colors.append(&b);
+    }
+    col.append(&colors);
+    let del = awra::Button::with_label("Supprimer la piste");
+    del.set_appearance(awra::ButtonAppearance::Destructive);
+    col.append(&del);
+    pop.set_child(Some(&col));
+    let s2 = s.clone();
+    name.connect_activate(move |e| {
+        let n = e.text();
+        if !n.trim().is_empty() {
+            s2.borrow_mut().commit_ops("Renommer", vec![Op::SetTrack { id: track, field: TrackField::Name(n) }]);
+        }
+    });
+    let s2 = s.clone();
+    let n2 = name.clone();
+    pop.connect_closed(move |_| {
+        let n = n2.text();
+        let cur = s2.borrow().doc.project.track(track).map(|t| t.name.clone());
+        if !n.trim().is_empty() && cur.is_some_and(|c| c != n) {
+            s2.borrow_mut().commit_ops("Renommer", vec![Op::SetTrack { id: track, field: TrackField::Name(n) }]);
+        }
+    });
+    let s2 = s.clone();
+    kd.connect_selected_notify(move |d| {
+        let k = kinds[d.selected() as usize % kinds.len()];
+        s2.borrow_mut().commit_ops("Type de piste", vec![Op::SetTrack { id: track, field: TrackField::Kind(k) }]);
+    });
+    let (s2, p2) = (s.clone(), pop.clone());
+    del.connect_clicked(move |_| {
+        p2.popdown();
+        s2.borrow_mut().commit_ops("Piste supprimée", vec![Op::RemoveTrack { id: track }]);
+    });
+    pop.popup_at(area, x, y);
 }
 
 pub fn split_selected_clip(s: &mut Studio) {
@@ -479,8 +571,21 @@ impl TimelinePanel {
             let (s, v, ar) = (s.clone(), view.clone(), area.clone());
             a.connect_raw(sig::PRESSED, move |_, args| {
                 ar.grab_focus();
-                let Ok(mut st) = s.try_borrow_mut() else { return };
-                press(&mut st, &mut v.borrow_mut(), args.x(), args.y(), args.button() as i32, args.n_press());
+                SHIFT.with(|x| x.set(args.mods().bits() & 1 != 0));
+                let header_menu = {
+                    let Ok(mut st) = s.try_borrow_mut() else { return };
+                    press(&mut st, &mut v.borrow_mut(), args.x(), args.y(), args.button() as i32, args.n_press());
+                    let on_name = args.x() < HEAD_W
+                        && track_at(&st, args.y()).is_some_and(|(i, _)| args.y() < track_y(&st, i) + 44.0);
+                    if (args.n_press() >= 2 && on_name) || (args.button() == 3 && args.x() < HEAD_W) {
+                        track_at(&st, args.y()).map(|t| t.1)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(track) = header_menu {
+                    track_menu(&s, &ar, track, args.x(), args.y());
+                }
                 ar.queue_draw();
             });
         }

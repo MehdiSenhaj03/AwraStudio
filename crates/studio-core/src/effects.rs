@@ -352,6 +352,7 @@ impl ParamSpec {
     /// A human readable value ("-3.0 dB", "4.5 kHz").
     pub fn format(&self, v: f64) -> String {
         match self.unit {
+            Unit::Db if self.min >= 0.0 => format!("{v:.1} dB"),
             Unit::Db => format!("{v:+.1} dB"),
             Unit::Hz if v >= 1000.0 => format!("{:.1} kHz", v / 1000.0),
             Unit::Hz => format!("{v:.0} Hz"),
