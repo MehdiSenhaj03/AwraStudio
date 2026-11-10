@@ -70,6 +70,8 @@ pub struct MixGraph {
     scratch_l: Vec<f32>,
     scratch_r: Vec<f32>,
     pub meters: Meters,
+    /// False while stopped: only live input (monitoring) and tails play.
+    pub play_clips: bool,
 }
 
 pub const MAX_BLOCK: usize = 4096;
@@ -136,6 +138,7 @@ impl MixGraph {
             scratch_l: vec![0.0; MAX_BLOCK],
             scratch_r: vec![0.0; MAX_BLOCK],
             meters: Meters::default(),
+            play_clips: true,
         }
     }
 
@@ -311,10 +314,12 @@ impl MixGraph {
             r.fill(0.0);
             let audible = !t.mute && (!any_solo || t.solo);
             let mut has_signal = false;
-            if audible {
+            if audible && self.play_clips {
                 for c in &t.clips {
                     has_signal |= mix_clip(c, pos, l, r);
                 }
+            }
+            if audible {
                 if t.monitor {
                     if let Some(inp) = input {
                         for i in 0..n.min(inp.len()) {

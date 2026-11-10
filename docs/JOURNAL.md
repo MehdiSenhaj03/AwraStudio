@@ -62,5 +62,13 @@ le travail après une perte de contexte).
 
 ## Journal
 
+- Crates terminées et testées : `studio-core` (7 tests), `studio-dsp`
+  (16 tests : effets, autotune qui ramène 450 Hz → 440 Hz, débruiteur STFT,
+  loudness BS.1770, graphe de mix), `studio-analysis` (5 tests : tempo,
+  tonalité, RT60, matching de référence), `studio-engine` (cpal 0.15,
+  thread « null » si pas de carte son ; `AWRA_STUDIO_NO_AUDIO=1` force ce
+  mode). Versions épinglées volontairement anciennes et connues : cpal 0.15,
+  symphonia 0.5, rtrb 0.3.
+
 - 2026-11-10 : exploration d'Awra, build OK (`cargo build --example smoke`,
   backend x11 headless). Création du workspace `studio/`.

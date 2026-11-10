@@ -1,7 +1,15 @@
 [package]
 name = "studio-engine"
+description = "Awra Studio: real-time audio engine (playback, monitoring, recording) on cpal"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+studio-core.workspace = true
+studio-dsp.workspace = true
+anyhow.workspace = true
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+cpal = "0.15"
+rtrb = "0.3"
